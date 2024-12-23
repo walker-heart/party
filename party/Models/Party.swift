@@ -1,5 +1,4 @@
 import Foundation
-import FirebaseFirestore
 
 struct Party: Identifiable, Codable, Sendable {
     let id: String
@@ -8,12 +7,12 @@ struct Party: Identifiable, Codable, Sendable {
     let creatorId: String
     let createdAt: Date
     let updatedAt: Date
-    var attendees: [Attendee]
+    let attendees: [Attendee]
     
     init(id: String = UUID().uuidString,
          name: String,
          passcode: String,
-         creatorId: String = "",
+         creatorId: String,
          createdAt: Date = Date(),
          updatedAt: Date = Date(),
          attendees: [Attendee] = []) {
@@ -25,4 +24,4 @@ struct Party: Identifiable, Codable, Sendable {
         self.updatedAt = updatedAt
         self.attendees = attendees
     }
-} 
+}

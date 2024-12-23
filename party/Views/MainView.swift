@@ -98,7 +98,7 @@ struct MainView: View {
                                                 Task {
                                                     do {
                                                         try await partyManager.deleteParty(party.id)
-                                                        authManager.removePartyFromActive(party.id)
+                                                        await authManager.removePartyFromActive(party.id)
                                                     } catch {
                                                         errorMessage = error.localizedDescription
                                                         showingError = true
@@ -156,7 +156,14 @@ struct MainView: View {
             .toolbar {
                 if authManager.isAuthenticated {
                     Button(action: {
-                        try? authManager.signOut()
+                        Task {
+                            do {
+                                try await authManager.signOut()
+                            } catch {
+                                errorMessage = error.localizedDescription
+                                showingError = true
+                            }
+                        }
                     }) {
                         HStack {
                             Text(authManager.currentUser?.email ?? "")

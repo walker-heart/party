@@ -6,11 +6,45 @@ import FirebaseFirestore
 final class PartyManager: ObservableObject {
     @Published private(set) var currentParty: Party?
     private let db: Firestore
-    private let collectionName = "party"
+    private let collectionName: String
     private var listenerRegistration: ListenerRegistration?
+    private weak var authManager: AuthManager?
+    
+    private enum FirestoreValue: Sendable {
+        case string(String)
+        case bool(Bool)
+        case timestamp(Date)
+        case serverTimestamp
+        case array([FirestoreValue])
+        case dictionary([String: FirestoreValue])
+        
+        var firestoreValue: Any {
+            switch self {
+            case .string(let str): return str
+            case .bool(let bool): return bool
+            case .timestamp(let date): return Timestamp(date: date)
+            case .serverTimestamp: return FieldValue.serverTimestamp()
+            case .array(let array): return array.map(\.firestoreValue)
+            case .dictionary(let dict): return dict.mapValues(\.firestoreValue)
+            }
+        }
+        
+        static func fromAttendee(_ attendee: Attendee) -> FirestoreValue {
+            .dictionary([
+                "id": .string(attendee.id),
+                "firstName": .string(attendee.firstName),
+                "lastName": .string(attendee.lastName),
+                "isPresent": .bool(attendee.isPresent),
+                "createdAt": .timestamp(attendee.createdAt),
+                "updatedAt": .timestamp(attendee.updatedAt),
+                "addMethod": .string(attendee.addMethod)
+            ])
+        }
+    }
     
     init(db: Firestore = Firestore.firestore(), previewParty: Party? = nil) {
         self.db = db
+        self.collectionName = "party"
         self.currentParty = previewParty
     }
     
@@ -21,6 +55,7 @@ final class PartyManager: ObservableObject {
                 id: "preview-id",
                 name: "Preview Party",
                 passcode: "1234",
+                creatorId: "preview-creator",
                 attendees: [
                     Attendee(firstName: "John", lastName: "Doe", isPresent: true, addMethod: "appAdd"),
                     Attendee(firstName: "Jane", lastName: "Smith", isPresent: false, addMethod: "appAdd")
@@ -39,121 +74,8 @@ final class PartyManager: ObservableObject {
         listenToParty(id: party.id)
     }
     
-    private enum SendableFirestoreValue: Sendable {
-        case string(String)
-        case bool(Bool)
-        case timestamp(Date)
-        case serverTimestamp
-        case array([SendableFirestoreValue])
-        case dictionary([String: SendableFirestoreValue])
-        
-        var firestoreValue: Any {
-            switch self {
-            case .string(let str): return str
-            case .bool(let bool): return bool
-            case .timestamp(let date): return Timestamp(date: date)
-            case .serverTimestamp: return FieldValue.serverTimestamp()
-            case .array(let array): return array.map { $0.firestoreValue }
-            case .dictionary(let dict): return dict.mapValues { $0.firestoreValue }
-            }
-        }
-    }
-    
-    private struct FirestorePartyData: Sendable {
-        let id: String
-        let name: String
-        let passcode: String
-        let people: [FirestoreAttendeeData]
-        let createdAt: Date?
-        let updatedAt: Date?
-        let creatorId: String
-        
-        var firestoreData: SendableFirestoreValue {
-            .dictionary([
-                "id": .string(id),
-                "name": .string(name),
-                "passcode": .string(passcode),
-                "people": .array(people.map { $0.firestoreData }),
-                "createdAt": createdAt.map { .timestamp($0) } ?? .serverTimestamp,
-                "updatedAt": updatedAt.map { .timestamp($0) } ?? .serverTimestamp,
-                "creatorId": .string(creatorId)
-            ])
-        }
-    }
-    
-    private struct FirestoreAttendeeData: Sendable {
-        let id: String
-        let firstName: String
-        let lastName: String
-        let isPresent: Bool
-        let createdAt: Date
-        let updatedAt: Date
-        let addMethod: String
-        
-        var firestoreData: SendableFirestoreValue {
-            .dictionary([
-                "id": .string(id),
-                "firstName": .string(firstName),
-                "lastName": .string(lastName),
-                "isPresent": .bool(isPresent),
-                "createdAt": .timestamp(createdAt),
-                "updatedAt": .timestamp(updatedAt),
-                "addMethod": .string(addMethod)
-            ])
-        }
-        
-        init(from attendee: Attendee) {
-            self.id = attendee.id
-            self.firstName = attendee.firstName
-            self.lastName = attendee.lastName
-            self.isPresent = attendee.isPresent
-            self.createdAt = attendee.createdAt
-            self.updatedAt = attendee.updatedAt
-            self.addMethod = attendee.addMethod
-        }
-    }
-    
-    func createParty(name: String, passcode: String, creatorId: String) async throws {
-        let party = Party(name: name, passcode: passcode, creatorId: creatorId)
-        guard !party.id.isEmpty else {
-            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid party ID"])
-        }
-        
-        let partyData = FirestorePartyData(
-            id: party.id,
-            name: name,
-            passcode: passcode,
-            people: [],
-            createdAt: nil,
-            updatedAt: nil,
-            creatorId: creatorId
-        )
-        
-        let documentRef = db.collection(collectionName).document(party.id)
-        try await documentRef.setData(partyData.firestoreData.firestoreValue as! [String: Any])
-        self.currentParty = party
-        listenToParty(id: party.id)
-    }
-    
-    func joinParty(withPasscode passcode: String) async throws {
-        guard !passcode.isEmpty else {
-            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Passcode cannot be empty"])
-        }
-        
-        let snapshot = try await db.collection(collectionName)
-            .whereField("passcode", isEqualTo: passcode)
-            .getDocuments()
-        
-        guard let document = snapshot.documents.first else {
-            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Party not found"])
-        }
-        
-        let partyId = document.documentID
-        guard !partyId.isEmpty else {
-            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid party ID"])
-        }
-        
-        listenToParty(id: partyId)
+    func setAuthManager(_ authManager: AuthManager) {
+        self.authManager = authManager
     }
     
     func addAttendee(firstName: String, lastName: String) async throws {
@@ -171,13 +93,20 @@ final class PartyManager: ObservableObject {
             addMethod: "appAdd"
         )
         
-        let attendeeData = FirestoreAttendeeData(from: attendee)
+        let attendeeData = FirestoreValue.fromAttendee(attendee)
         let documentRef = db.collection(collectionName).document(party.id)
         
-        try await documentRef.updateData([
-            "people": FieldValue.arrayUnion([attendeeData.firestoreData.firestoreValue as! [String: Any]]),
+        let updateData: [String: Any] = [
+            "people": FieldValue.arrayUnion([attendeeData.firestoreValue]),
             "updatedAt": FieldValue.serverTimestamp()
-        ])
+        ]
+        
+        try await documentRef.updateData(updateData)
+        
+        // Refresh the party in AuthManager
+        if let authManager = authManager {
+            try await authManager.refreshParty(party.id)
+        }
     }
     
     func updateAttendanceStatus(for attendeeId: String, isPresent: Bool) async throws {
@@ -197,10 +126,16 @@ final class PartyManager: ObservableObject {
             people[index]["isPresent"] = isPresent
             people[index]["updatedAt"] = Timestamp(date: Date())
             
-            try await documentRef.updateData([
+            let updateData: [String: Any] = [
                 "people": people,
                 "updatedAt": FieldValue.serverTimestamp()
-            ])
+            ]
+            try await documentRef.updateData(updateData)
+            
+            // Refresh the party in AuthManager
+            if let authManager = authManager {
+                try await authManager.refreshParty(party.id)
+            }
         }
     }
     
@@ -219,31 +154,16 @@ final class PartyManager: ObservableObject {
         var people = data["people"] as? [[String: Any]] ?? []
         people.removeAll { ($0["id"] as? String) == attendeeId }
         
-        try await documentRef.updateData([
+        let updateData: [String: Any] = [
             "people": people,
             "updatedAt": FieldValue.serverTimestamp()
-        ])
-    }
-    
-    private func parseAttendee(from data: [String: Any]) -> Attendee? {
-        guard let id = data["id"] as? String,
-              let firstName = data["firstName"] as? String,
-              let lastName = data["lastName"] as? String,
-              let isPresent = data["isPresent"] as? Bool,
-              let createdAt = (data["createdAt"] as? Timestamp)?.dateValue(),
-              let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue(),
-              let addMethod = data["addMethod"] as? String
-        else { return nil }
+        ]
+        try await documentRef.updateData(updateData)
         
-        return Attendee(
-            id: id,
-            firstName: firstName,
-            lastName: lastName,
-            isPresent: isPresent,
-            createdAt: createdAt,
-            updatedAt: updatedAt,
-            addMethod: addMethod
-        )
+        // Refresh the party in AuthManager
+        if let authManager = authManager {
+            try await authManager.refreshParty(party.id)
+        }
     }
     
     private func listenToParty(id: String) {
@@ -253,28 +173,58 @@ final class PartyManager: ObservableObject {
         
         let documentRef = db.collection(collectionName).document(id)
         listenerRegistration = documentRef.addSnapshotListener { [weak self] documentSnapshot, error in
-            guard let self = self,
-                  let document = documentSnapshot,
-                  let data = document.data() else {
-                print("Error listening to party:", error?.localizedDescription ?? "Unknown error")
-                return
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                guard let document = documentSnapshot,
+                      let data = document.data() else {
+                    print("Error listening to party:", error?.localizedDescription ?? "Unknown error")
+                    return
+                }
+                
+                // Create local copies of data to avoid capturing state
+                let peopleData = data["people"] as? [[String: Any]] ?? []
+                let name = data["name"] as? String ?? ""
+                let passcode = data["passcode"] as? String ?? ""
+                let creatorId = data["creatorId"] as? String ?? ""
+                let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+                let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? createdAt
+                
+                // Process attendees using FirestoreValue
+                let attendees = peopleData.compactMap { attendeeData -> Attendee? in
+                    guard let id = attendeeData["id"] as? String,
+                          let firstName = attendeeData["firstName"] as? String,
+                          let lastName = attendeeData["lastName"] as? String,
+                          let isPresent = attendeeData["isPresent"] as? Bool,
+                          let createdAt = (attendeeData["createdAt"] as? Timestamp)?.dateValue(),
+                          let updatedAt = (attendeeData["updatedAt"] as? Timestamp)?.dateValue(),
+                          let addMethod = attendeeData["addMethod"] as? String
+                    else { return nil }
+                    
+                    return Attendee(
+                        id: id,
+                        firstName: firstName,
+                        lastName: lastName,
+                        isPresent: isPresent,
+                        createdAt: createdAt,
+                        updatedAt: updatedAt,
+                        addMethod: addMethod
+                    )
+                }
+                
+                // Create the party object
+                let updatedParty = Party(
+                    id: document.documentID,
+                    name: name,
+                    passcode: passcode,
+                    creatorId: creatorId,
+                    createdAt: createdAt,
+                    updatedAt: updatedAt,
+                    attendees: attendees
+                )
+                
+                // Update the current party on the main actor
+                self.currentParty = updatedParty
             }
-            
-            let attendees = (data["people"] as? [[String: Any]] ?? [])
-                .compactMap { self.parseAttendee(from: $0) }
-            
-            let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
-            let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? createdAt
-            
-            self.currentParty = Party(
-                id: document.documentID,
-                name: data["name"] as? String ?? "",
-                passcode: data["passcode"] as? String ?? "",
-                creatorId: data["creatorId"] as? String ?? "",
-                createdAt: createdAt,
-                updatedAt: updatedAt,
-                attendees: attendees
-            )
         }
     }
     
@@ -306,4 +256,47 @@ final class PartyManager: ObservableObject {
             currentParty = nil
         }
     }
-} 
+    
+    func createParty(name: String, passcode: String, creatorId: String) async throws {
+        let party = Party(name: name, passcode: passcode, creatorId: creatorId)
+        guard !party.id.isEmpty else {
+            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid party ID"])
+        }
+        
+        let partyData = FirestoreValue.dictionary([
+            "id": .string(party.id),
+            "name": .string(name),
+            "passcode": .string(passcode),
+            "people": .array([]),
+            "createdAt": .serverTimestamp,
+            "updatedAt": .serverTimestamp,
+            "creatorId": .string(creatorId)
+        ])
+        
+        let documentRef = db.collection(collectionName).document(party.id)
+        try await documentRef.setData(partyData.firestoreValue as! [String: Any])
+        self.currentParty = party
+        listenToParty(id: party.id)
+    }
+    
+    func joinParty(withPasscode passcode: String) async throws {
+        guard !passcode.isEmpty else {
+            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Passcode cannot be empty"])
+        }
+        
+        let snapshot = try await db.collection(collectionName)
+            .whereField("passcode", isEqualTo: passcode)
+            .getDocuments()
+        
+        guard let document = snapshot.documents.first else {
+            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Party not found"])
+        }
+        
+        let partyId = document.documentID
+        guard !partyId.isEmpty else {
+            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid party ID"])
+        }
+        
+        listenToParty(id: partyId)
+    }
+}

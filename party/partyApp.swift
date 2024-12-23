@@ -28,6 +28,9 @@ struct PartyApp: App {
             MainView()
                 .environmentObject(partyManager)
                 .environmentObject(authManager)
+                .onAppear {
+                    partyManager.setAuthManager(authManager)
+                }
         }
     }
 }
