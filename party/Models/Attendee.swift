@@ -9,6 +9,7 @@ struct Attendee: Identifiable, Codable, Sendable {
     let createdAt: Date
     var updatedAt: Date
     let addMethod: String
+    var updatedBy: String?
     
     var fullName: String {
         "\(firstName) \(lastName)"
@@ -20,7 +21,8 @@ struct Attendee: Identifiable, Codable, Sendable {
          isPresent: Bool = false,
          createdAt: Date = Date(),
          updatedAt: Date = Date(),
-         addMethod: String = "appAdd") {
+         addMethod: String = "appAdd",
+         updatedBy: String? = nil) {
         self.id = id
         self.firstName = firstName
         self.lastName = lastName
@@ -28,6 +30,7 @@ struct Attendee: Identifiable, Codable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.addMethod = addMethod
+        self.updatedBy = updatedBy
     }
     
     enum CodingKeys: String, CodingKey {
@@ -38,5 +41,6 @@ struct Attendee: Identifiable, Codable, Sendable {
         case createdAt
         case updatedAt
         case addMethod
+        case updatedBy
     }
 } 

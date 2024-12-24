@@ -10,164 +10,39 @@ final class AuthManager: ObservableObject {
     
     private let auth: Auth
     private let db: Firestore
-    private let usersCollection: String
-    private let partiesCollection: String
-    private var authStateListener: AuthStateDidChangeListenerHandle?
-    private var partyListeners: [String: ListenerRegistration]
+    private let usersCollection = "users"
+    private let partiesCollection = "party"
+    private var partyManager: PartyManager?
     
-    private enum FirestoreValue: Sendable {
-        case string(String)
-        case bool(Bool)
-        case timestamp(Date)
-        case serverTimestamp
-        case array([FirestoreValue])
-        case dictionary([String: FirestoreValue])
+    init(auth: Auth = Auth.auth(), db: Firestore = Firestore.firestore()) {
+        self.auth = auth
+        self.db = db
         
-        var firestoreValue: Any {
-            switch self {
-            case .string(let str): return str
-            case .bool(let bool): return bool
-            case .timestamp(let date): return Timestamp(date: date)
-            case .serverTimestamp: return FieldValue.serverTimestamp()
-            case .array(let array): return array.map(\.firestoreValue)
-            case .dictionary(let dict): return dict.mapValues(\.firestoreValue)
+        // Set up auth state listener
+        _ = auth.addStateDidChangeListener { [weak self] _, user in
+            Task { @MainActor [weak self] in
+                if let user = user {
+                    do {
+                        try await self?.fetchUserData(userId: user.uid)
+                    } catch {
+                        print("Error fetching user data:", error.localizedDescription)
+                        self?.resetState()
+                    }
+                } else {
+                    self?.removeAllPartyListeners()
+                    self?.resetState()
+                }
             }
         }
     }
     
-    init(auth: Auth = Auth.auth(), 
-         db: Firestore = Firestore.firestore()) {
-        self.auth = auth
-        self.db = db
-        self.usersCollection = "users"
-        self.partiesCollection = "party"
-        self.partyListeners = [:]
-        setupAuthStateListener()
-    }
-    
-    deinit {
-        if let listener = authStateListener {
-            auth.removeStateDidChangeListener(listener)
-        }
-        for listener in partyListeners.values {
-            listener.remove()
-        }
-        partyListeners.removeAll()
+    func setPartyManager(_ partyManager: PartyManager) {
+        self.partyManager = partyManager
     }
     
     private func removeAllPartyListeners() {
-        for listener in partyListeners.values {
-            listener.remove()
-        }
-        partyListeners.removeAll()
-    }
-    
-    private func listenToParty(_ partyId: String) {
-        // Remove existing listener if any
-        partyListeners[partyId]?.remove()
-        
-        // Set up new listener
-        let listener = db.collection(partiesCollection).document(partyId)
-            .addSnapshotListener { [weak self] documentSnapshot, error in
-                Task { @MainActor [weak self] in
-                    guard let self = self else { return }
-                    guard let document = documentSnapshot,
-                          let data = document.data() else {
-                        print("Error listening to party:", error?.localizedDescription ?? "Unknown error")
-                        return
-                    }
-                    
-                    // Create local copies of data to avoid capturing state
-                    let peopleData = data["people"] as? [[String: Any]] ?? []
-                    let name = data["name"] as? String ?? ""
-                    let passcode = data["passcode"] as? String ?? ""
-                    let creatorId = data["creatorId"] as? String ?? ""
-                    let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
-                    let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? createdAt
-                    
-                    // Process attendees
-                    let attendees = peopleData.compactMap { attendeeData -> Attendee? in
-                        guard let id = attendeeData["id"] as? String,
-                              let firstName = attendeeData["firstName"] as? String,
-                              let lastName = attendeeData["lastName"] as? String,
-                              let isPresent = attendeeData["isPresent"] as? Bool,
-                              let createdAt = (attendeeData["createdAt"] as? Timestamp)?.dateValue(),
-                              let updatedAt = (attendeeData["updatedAt"] as? Timestamp)?.dateValue(),
-                              let addMethod = attendeeData["addMethod"] as? String
-                        else { return nil }
-                        
-                        return Attendee(
-                            id: id,
-                            firstName: firstName,
-                            lastName: lastName,
-                            isPresent: isPresent,
-                            createdAt: createdAt,
-                            updatedAt: updatedAt,
-                            addMethod: addMethod
-                        )
-                    }
-                    
-                    // Create and update party
-                    let updatedParty = Party(
-                        id: document.documentID,
-                        name: name,
-                        passcode: passcode,
-                        creatorId: creatorId,
-                        createdAt: createdAt,
-                        updatedAt: updatedAt,
-                        attendees: attendees
-                    )
-                    
-                    // Update active parties
-                    if let index = self.activeParties.firstIndex(where: { $0.id == partyId }) {
-                        self.activeParties[index] = updatedParty
-                        self.activeParties.sort { $0.updatedAt > $1.updatedAt }
-                    }
-                }
-            }
-        
-        partyListeners[partyId] = listener
-    }
-    
-    private func setupAuthStateListener() {
-        authStateListener = auth.addStateDidChangeListener { [weak self] _, user in
-            guard let self = self else { return }
-            Task { @MainActor in
-                if let user = user {
-                    do {
-                        try await self.fetchUserData(userId: user.uid)
-                    } catch {
-                        print("Error fetching user data:", error.localizedDescription)
-                        self.resetState()
-                    }
-                } else {
-                    self.removeAllPartyListeners()
-                    self.resetState()
-                }
-            }
-        }
-    }
-    
-    private func resetState() {
-        self.currentUser = nil
-        self.isAuthenticated = false
-        self.activeParties = []
-    }
-    
-    func signOut() async throws {
-        try auth.signOut()
-        removeAllPartyListeners()
-        resetState()
-    }
-    
-    func refreshParty(_ partyId: String) async throws {
-        guard !partyId.isEmpty else { return }
-        
-        if let party = try? await fetchParty(partyId: partyId) {
-            if let index = activeParties.firstIndex(where: { $0.id == partyId }) {
-                activeParties[index] = party
-                activeParties.sort { $0.updatedAt > $1.updatedAt }
-            }
+        for party in activeParties {
+            partyManager?.removeListener(for: party.id)
         }
     }
     
@@ -188,43 +63,77 @@ final class AuthManager: ObservableObject {
             return
         }
         
-        guard let data = document.data(),
-              let user = try? Firestore.Decoder().decode(User.self, from: data) else {
-            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid user data"])
+        guard let data = document.data() else {
+            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "User data not found"])
         }
+        
+        // Create user from raw data to handle missing fields
+        let user = User(
+            id: userId,
+            email: data["email"] as? String ?? auth.currentUser?.email ?? "",
+            firstName: data["firstName"] as? String ?? "",
+            lastName: data["lastName"] as? String ?? "",
+            isAdmin: data["isAdmin"] as? Bool ?? false,
+            activeParties: data["activeParties"] as? [String] ?? []
+        )
+        
+        // Update user data to ensure it has all fields
+        try await saveUserData(user)
         
         self.currentUser = user
         self.isAuthenticated = true
         
-        // If user is admin, fetch all parties
+        // Remove existing listeners
+        removeAllPartyListeners()
+        
+        // If user is admin, fetch all parties, otherwise fetch active parties
         if user.isAdmin {
             let snapshot = try await db.collection(partiesCollection).getDocuments()
             var parties: [Party] = []
             for document in snapshot.documents {
                 if let party = try? await fetchParty(partyId: document.documentID) {
                     parties.append(party)
+                    partyManager?.listenToParty(id: party.id)
                 }
             }
             self.activeParties = parties.sorted { $0.updatedAt > $1.updatedAt }
-            for party in parties {
-                listenToParty(party.id)
-            }
-        }
-        // Otherwise, fetch only active parties
-        else if !user.activeParties.isEmpty {
-            var parties: [Party] = []
-            for partyId in user.activeParties {
-                if let party = try? await fetchParty(partyId: partyId) {
-                    parties.append(party)
-                }
-            }
-            self.activeParties = parties.sorted { $0.updatedAt > $1.updatedAt }
-            for party in parties {
-                listenToParty(party.id)
-            }
         } else {
-            self.activeParties = []
+            // Get all parties from Firestore
+            let snapshot = try await db.collection(partiesCollection).getDocuments()
+            var parties: [Party] = []
+            
+            // Get current date and date 3 days ago
+            let currentDate = Date()
+            let threeDaysAgo = Calendar.current.date(byAdding: .day, value: -3, to: currentDate) ?? currentDate
+            
+            for document in snapshot.documents {
+                if let party = try? await fetchParty(partyId: document.documentID) {
+                    // Include party if:
+                    // 1. User is an editor
+                    // 2. Party was joined in the last 3 days
+                    if party.editors.contains(user.id) || 
+                       (party.updatedAt >= threeDaysAgo && user.activeParties.contains(party.id)) {
+                        parties.append(party)
+                        partyManager?.listenToParty(id: party.id)
+                    }
+                }
+            }
+            
+            // Sort by most recently updated
+            self.activeParties = parties.sorted { $0.updatedAt > $1.updatedAt }
         }
+    }
+    
+    private func resetState() {
+        self.currentUser = nil
+        self.isAuthenticated = false
+        self.activeParties = []
+    }
+    
+    func signOut() async throws {
+        try auth.signOut()
+        removeAllPartyListeners()
+        resetState()
     }
     
     func signIn(email: String, password: String) async throws {
@@ -232,9 +141,14 @@ final class AuthManager: ObservableObject {
         try await fetchUserData(userId: result.user.uid)
     }
     
-    func signUp(email: String, password: String) async throws {
+    func signUp(email: String, password: String, firstName: String = "", lastName: String = "") async throws {
         let result = try await auth.createUser(withEmail: email, password: password)
-        let user = User(id: result.user.uid, email: email)
+        let user = User(
+            id: result.user.uid,
+            email: email,
+            firstName: firstName,
+            lastName: lastName
+        )
         try await saveUserData(user)
         self.currentUser = user
         self.isAuthenticated = true
@@ -258,45 +172,23 @@ final class AuthManager: ObservableObject {
             throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
         }
         
-        // If admin, refresh all parties
-        if user.isAdmin {
-            let snapshot = try await db.collection(partiesCollection).getDocuments()
-            var parties: [Party] = []
-            for document in snapshot.documents {
-                if let party = try? await fetchParty(partyId: document.documentID) {
-                    parties.append(party)
-                }
-            }
-            self.activeParties = parties.sorted { $0.updatedAt > $1.updatedAt }
-            for party in parties {
-                listenToParty(party.id)
-            }
-            return
-        }
-        
-        // For regular users, add to active parties
         if !user.activeParties.contains(partyId) {
             user.activeParties.append(partyId)
             try await saveUserData(user)
             self.currentUser = user
             
             if let party = try? await fetchParty(partyId: partyId) {
-                self.activeParties.append(party)
-                self.activeParties.sort { $0.updatedAt > $1.updatedAt }
-                listenToParty(party.id)
+                if !activeParties.contains(where: { $0.id == partyId }) {
+                    activeParties.append(party)
+                    activeParties.sort { $0.updatedAt > $1.updatedAt }
+                }
             }
         }
     }
     
     func removePartyFromActive(_ partyId: String) async {
-        // Remove from active parties
         activeParties.removeAll { $0.id == partyId }
         
-        // Remove listener
-        partyListeners[partyId]?.remove()
-        partyListeners.removeValue(forKey: partyId)
-        
-        // Also remove from user's active parties if not admin
         if let user = currentUser, !user.isAdmin {
             var updatedUser = user
             updatedUser.activeParties.removeAll { $0 == partyId }
@@ -309,19 +201,20 @@ final class AuthManager: ObservableObject {
         }
     }
     
-    private func fetchParty(partyId: String) async throws -> Party {
+    func fetchParty(partyId: String) async throws -> Party {
         guard !partyId.isEmpty else {
             throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid party ID"])
         }
         
         let document = try await db.collection(partiesCollection).document(partyId).getDocument()
-        guard let data = document.data(),
-              let name = data["name"] as? String,
-              let passcode = data["passcode"] as? String else {
-            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid party data"])
+        guard let data = document.data() else {
+            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Party data not found"])
         }
         
+        let name = data["name"] as? String ?? ""
+        let passcode = data["passcode"] as? String ?? ""
         let creatorId = data["creatorId"] as? String ?? ""
+        let editors = data["editors"] as? [String] ?? [creatorId]
         let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
         let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? createdAt
         
@@ -335,6 +228,8 @@ final class AuthManager: ObservableObject {
                   let addMethod = personData["addMethod"] as? String
             else { return nil }
             
+            let updatedBy = personData["updatedBy"] as? String
+            
             return Attendee(
                 id: id,
                 firstName: firstName,
@@ -342,7 +237,8 @@ final class AuthManager: ObservableObject {
                 isPresent: isPresent,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
-                addMethod: addMethod
+                addMethod: addMethod,
+                updatedBy: updatedBy
             )
         }
         
@@ -353,7 +249,46 @@ final class AuthManager: ObservableObject {
             creatorId: creatorId,
             createdAt: createdAt,
             updatedAt: updatedAt,
-            attendees: people
+            attendees: people,
+            editors: editors
         )
+    }
+    
+    func getUserIdByEmail(_ email: String) async throws -> String? {
+        let snapshot = try await db.collection(usersCollection)
+            .whereField("email", isEqualTo: email)
+            .getDocuments()
+        
+        return snapshot.documents.first?.documentID
+    }
+    
+    func getUserById(_ userId: String) async throws -> User? {
+        guard !userId.isEmpty else { return nil }
+        
+        let document = try await db.collection(usersCollection).document(userId).getDocument()
+        guard let data = document.data() else { return nil }
+        
+        return User(
+            id: userId,
+            email: data["email"] as? String ?? "",
+            firstName: data["firstName"] as? String ?? "",
+            lastName: data["lastName"] as? String ?? "",
+            isAdmin: data["isAdmin"] as? Bool ?? false,
+            activeParties: data["activeParties"] as? [String] ?? []
+        )
+    }
+    
+    func refreshParty(_ partyId: String) async throws {
+        let party = try await fetchParty(partyId: partyId)
+        refreshParty(party)
+    }
+    
+    func refreshParty(_ party: Party?) {
+        guard let party = party else { return }
+        if let index = activeParties.firstIndex(where: { $0.id == party.id }) {
+            activeParties[index] = party
+            // Sort by most recently updated
+            activeParties.sort { $0.updatedAt > $1.updatedAt }
+        }
     }
 }

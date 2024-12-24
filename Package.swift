@@ -5,7 +5,7 @@ import PackageDescription
 let package = Package(
     name: "party",
     platforms: [
-        .iOS(.v16)
+        .iOS(.v17)
     ],
     products: [
         .library(
@@ -22,7 +22,12 @@ let package = Package(
                 .product(name: "FirebaseAuth", package: "firebase-ios-sdk"),
                 .product(name: "FirebaseFirestore", package: "firebase-ios-sdk"),
                 .product(name: "FirebaseFirestoreSwift", package: "firebase-ios-sdk")
-            ]),
+            ],
+            swiftSettings: [
+                .enableUpcomingFeature("BareSlashRegexLiterals"),
+                .enableExperimentalFeature("StrictConcurrency")
+            ]
+        ),
         .testTarget(
             name: "partyTests",
             dependencies: ["party"]),

@@ -30,7 +30,7 @@ final class PartyManager: ObservableObject {
         }
         
         static func fromAttendee(_ attendee: Attendee) -> FirestoreValue {
-            .dictionary([
+            var dict: [String: FirestoreValue] = [
                 "id": .string(attendee.id),
                 "firstName": .string(attendee.firstName),
                 "lastName": .string(attendee.lastName),
@@ -38,7 +38,13 @@ final class PartyManager: ObservableObject {
                 "createdAt": .timestamp(attendee.createdAt),
                 "updatedAt": .timestamp(attendee.updatedAt),
                 "addMethod": .string(attendee.addMethod)
-            ])
+            ]
+            
+            if let updatedBy = attendee.updatedBy {
+                dict["updatedBy"] = .string(updatedBy)
+            }
+            
+            return .dictionary(dict)
         }
     }
     
@@ -125,6 +131,7 @@ final class PartyManager: ObservableObject {
         if let index = people.firstIndex(where: { ($0["id"] as? String) == attendeeId }) {
             people[index]["isPresent"] = isPresent
             people[index]["updatedAt"] = Timestamp(date: Date())
+            people[index]["updatedBy"] = authManager?.currentUser?.id
             
             let updateData: [String: Any] = [
                 "people": people,
@@ -166,7 +173,14 @@ final class PartyManager: ObservableObject {
         }
     }
     
-    private func listenToParty(id: String) {
+    func removeListener(for partyId: String) {
+        if currentParty?.id == partyId {
+            listenerRegistration?.remove()
+            listenerRegistration = nil
+        }
+    }
+    
+    func listenToParty(id: String) {
         guard !id.isEmpty else { return }
         
         listenerRegistration?.remove()
@@ -176,29 +190,29 @@ final class PartyManager: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 guard let document = documentSnapshot,
+                      document.exists,
                       let data = document.data() else {
-                    print("Error listening to party:", error?.localizedDescription ?? "Unknown error")
                     return
                 }
                 
-                // Create local copies of data to avoid capturing state
-                let peopleData = data["people"] as? [[String: Any]] ?? []
                 let name = data["name"] as? String ?? ""
                 let passcode = data["passcode"] as? String ?? ""
                 let creatorId = data["creatorId"] as? String ?? ""
+                let editors = data["editors"] as? [String] ?? [creatorId]
                 let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
                 let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? createdAt
                 
-                // Process attendees using FirestoreValue
-                let attendees = peopleData.compactMap { attendeeData -> Attendee? in
-                    guard let id = attendeeData["id"] as? String,
-                          let firstName = attendeeData["firstName"] as? String,
-                          let lastName = attendeeData["lastName"] as? String,
-                          let isPresent = attendeeData["isPresent"] as? Bool,
-                          let createdAt = (attendeeData["createdAt"] as? Timestamp)?.dateValue(),
-                          let updatedAt = (attendeeData["updatedAt"] as? Timestamp)?.dateValue(),
-                          let addMethod = attendeeData["addMethod"] as? String
+                let people = (data["people"] as? [[String: Any]] ?? []).compactMap { personData -> Attendee? in
+                    guard let id = personData["id"] as? String,
+                          let firstName = personData["firstName"] as? String,
+                          let lastName = personData["lastName"] as? String,
+                          let isPresent = personData["isPresent"] as? Bool,
+                          let createdAt = (personData["createdAt"] as? Timestamp)?.dateValue(),
+                          let updatedAt = (personData["updatedAt"] as? Timestamp)?.dateValue(),
+                          let addMethod = personData["addMethod"] as? String
                     else { return nil }
+                    
+                    let updatedBy = personData["updatedBy"] as? String
                     
                     return Attendee(
                         id: id,
@@ -207,23 +221,28 @@ final class PartyManager: ObservableObject {
                         isPresent: isPresent,
                         createdAt: createdAt,
                         updatedAt: updatedAt,
-                        addMethod: addMethod
+                        addMethod: addMethod,
+                        updatedBy: updatedBy
                     )
                 }
                 
-                // Create the party object
-                let updatedParty = Party(
+                let party = Party(
                     id: document.documentID,
                     name: name,
                     passcode: passcode,
                     creatorId: creatorId,
                     createdAt: createdAt,
                     updatedAt: updatedAt,
-                    attendees: attendees
+                    attendees: people,
+                    editors: editors
                 )
                 
-                // Update the current party on the main actor
-                self.currentParty = updatedParty
+                self.currentParty = party
+                
+                // Notify AuthManager of the update
+                if let authManager = self.authManager {
+                    authManager.refreshParty(party)
+                }
             }
         }
     }
@@ -258,7 +277,7 @@ final class PartyManager: ObservableObject {
     }
     
     func createParty(name: String, passcode: String, creatorId: String) async throws {
-        let party = Party(name: name, passcode: passcode, creatorId: creatorId)
+        let party = Party(name: name, passcode: passcode, creatorId: creatorId, editors: [creatorId])
         guard !party.id.isEmpty else {
             throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid party ID"])
         }
@@ -270,11 +289,18 @@ final class PartyManager: ObservableObject {
             "people": .array([]),
             "createdAt": .serverTimestamp,
             "updatedAt": .serverTimestamp,
-            "creatorId": .string(creatorId)
+            "creatorId": .string(creatorId),
+            "editors": .array([.string(creatorId)])
         ])
         
         let documentRef = db.collection(collectionName).document(party.id)
         try await documentRef.setData(partyData.firestoreValue as! [String: Any])
+        
+        // Add the party to the creator's active parties
+        if let authManager = authManager {
+            try await authManager.addPartyToActive(party.id)
+        }
+        
         self.currentParty = party
         listenToParty(id: party.id)
     }
@@ -297,6 +323,107 @@ final class PartyManager: ObservableObject {
             throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid party ID"])
         }
         
+        // Add the party to the user's active parties
+        if let authManager = authManager {
+            try await authManager.addPartyToActive(partyId)
+        }
+        
         listenToParty(id: partyId)
+    }
+    
+    func updateAttendeeName(attendeeId: String, firstName: String, lastName: String) async throws {
+        guard let party = currentParty, !party.id.isEmpty else {
+            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "No active party"])
+        }
+        
+        let documentRef = db.collection(collectionName).document(party.id)
+        let document = try await documentRef.getDocument()
+        
+        guard let data = document.data() else {
+            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Party data not found"])
+        }
+        
+        var people = data["people"] as? [[String: Any]] ?? []
+        if let index = people.firstIndex(where: { ($0["id"] as? String) == attendeeId }) {
+            people[index]["firstName"] = firstName
+            people[index]["lastName"] = lastName
+            people[index]["updatedAt"] = Timestamp(date: Date())
+            people[index]["updatedBy"] = authManager?.currentUser?.id
+            
+            let updateData: [String: Any] = [
+                "people": people,
+                "updatedAt": FieldValue.serverTimestamp()
+            ]
+            try await documentRef.updateData(updateData)
+            
+            // Refresh the party in AuthManager
+            if let authManager = authManager {
+                try await authManager.refreshParty(party.id)
+            }
+        }
+    }
+    
+    func addEditor(_ userId: String) async throws {
+        guard let party = currentParty, !party.id.isEmpty else {
+            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "No active party"])
+        }
+        
+        let documentRef = db.collection(collectionName).document(party.id)
+        let document = try await documentRef.getDocument()
+        
+        guard let data = document.data() else {
+            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Party data not found"])
+        }
+        
+        var editors = data["editors"] as? [String] ?? [party.creatorId]
+        if !editors.contains(userId) {
+            editors.append(userId)
+            
+            let updateData: [String: Any] = [
+                "editors": editors,
+                "updatedAt": FieldValue.serverTimestamp()
+            ]
+            try await documentRef.updateData(updateData)
+            
+            // Add party to the new editor's active parties
+            if let authManager = authManager {
+                try await authManager.addPartyToActive(party.id)
+                
+                // Refresh the party to update the UI
+                try await authManager.refreshParty(party.id)
+            }
+        }
+    }
+    
+    func removeEditor(_ userId: String) async throws {
+        guard let party = currentParty, !party.id.isEmpty else {
+            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "No active party"])
+        }
+        
+        // Don't allow removing the creator
+        guard userId != party.creatorId else {
+            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot remove the party creator"])
+        }
+        
+        let documentRef = db.collection(collectionName).document(party.id)
+        let document = try await documentRef.getDocument()
+        
+        guard let data = document.data() else {
+            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Party data not found"])
+        }
+        
+        var editors = data["editors"] as? [String] ?? [party.creatorId]
+        editors.removeAll { $0 == userId }
+        
+        let updateData: [String: Any] = [
+            "editors": editors,
+            "updatedAt": FieldValue.serverTimestamp()
+        ]
+        try await documentRef.updateData(updateData)
+        
+        // Remove party from the editor's active parties
+        if let authManager = authManager {
+            await authManager.removePartyFromActive(party.id)
+        }
     }
 }

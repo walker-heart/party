@@ -1,10 +1,3 @@
-//
-//  partyApp.swift
-//  party
-//
-//  Created by Walker Heartfield on 12/20/24.
-//
-
 import SwiftUI
 import FirebaseCore
 import FirebaseFirestore

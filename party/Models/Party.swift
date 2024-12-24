@@ -8,6 +8,7 @@ struct Party: Identifiable, Codable, Sendable {
     let createdAt: Date
     let updatedAt: Date
     let attendees: [Attendee]
+    let editors: [String]  // Array of user IDs who can edit the party
     
     init(id: String = UUID().uuidString,
          name: String,
@@ -15,7 +16,8 @@ struct Party: Identifiable, Codable, Sendable {
          creatorId: String,
          createdAt: Date = Date(),
          updatedAt: Date = Date(),
-         attendees: [Attendee] = []) {
+         attendees: [Attendee] = [],
+         editors: [String] = []) {
         self.id = id
         self.name = name
         self.passcode = passcode
@@ -23,5 +25,6 @@ struct Party: Identifiable, Codable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.attendees = attendees
+        self.editors = editors.isEmpty ? [creatorId] : editors  // Always include creator
     }
 }

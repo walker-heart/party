@@ -1,233 +1,284 @@
 import SwiftUI
 
 struct MainView: View {
-    @EnvironmentObject private var partyManager: PartyManager
-    @EnvironmentObject private var authManager: AuthManager
-    @State private var passcode = ""
-    @State private var partyName = ""
+    @StateObject private var authManager = AuthManager()
+    @StateObject private var partyManager = PartyManager()
     @State private var showingCreateParty = false
+    @State private var showingJoinParty = false
     @State private var showingAttendeeList = false
-    @State private var showingLogin = false
-    @State private var showingError = false
-    @State private var errorMessage: String? = nil
+    @State private var showingLoginSheet = false
+    @State private var showingAccount = false
+    @State private var partyName = ""
+    @State private var passcode = ""
+    @State private var showError = false
+    @State private var errorMessage = ""
+    @State private var isLoading = false
+    @Environment(\.colorScheme) private var colorScheme
     
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 30) {
-                Text("Party")
-                    .font(.largeTitle)
-                    .fontWeight(.bold)
+        NavigationView {
+            ZStack {
+                // Background
+                Theme.Colors.background(colorScheme)
+                    .ignoresSafeArea()
                 
-                VStack(spacing: 20) {
-                    if authManager.isAuthenticated {
-                        Button(action: { showingCreateParty = true }) {
-                            Text("Create Party")
-                                .foregroundColor(.white)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 50)
-                                .background(Color.blue)
-                                .cornerRadius(10)
-                        }
-                    } else {
-                        Button(action: { showingLogin = true }) {
-                            Text("Sign in to create party")
-                                .foregroundColor(.white)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 50)
-                                .background(Color.gray)
-                                .cornerRadius(10)
-                        }
-                    }
-                    
-                    Text("OR")
-                        .foregroundColor(.gray)
-                    
-                    VStack(spacing: 15) {
-                        SecureField("Enter Passcode", text: $passcode)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .keyboardType(.numberPad)
-                        
-                        Button(action: joinParty) {
-                            Text("Join Party")
-                                .foregroundColor(.white)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 50)
-                                .background(Color.green)
-                                .cornerRadius(10)
-                        }
-                        .disabled(passcode.isEmpty)
-                    }
-                }
-                .padding(.horizontal, 50)
-                
-                if authManager.isAuthenticated {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(authManager.currentUser?.isAdmin == true ? "All Parties" : "Your Active Parties")
-                            .font(.headline)
-                            .padding(.horizontal)
-                        
-                        if authManager.activeParties.isEmpty {
-                            Text("No parties")
-                                .foregroundColor(.gray)
-                                .padding(.horizontal)
-                        } else {
-                            List(authManager.activeParties) { party in
-                                Button(action: {
-                                    partyManager.setCurrentParty(party)
-                                    showingAttendeeList = true
-                                }) {
-                                    HStack {
-                                        VStack(alignment: .leading) {
-                                            Text(party.name)
-                                                .font(.headline)
-                                            HStack {
-                                                Text("Passcode: \(party.passcode)")
-                                                Spacer()
-                                                Text("Here: \(party.attendees.filter(\.isPresent).count)")
-                                                    .foregroundColor(.green)
-                                                Text("Away: \(party.attendees.filter { !$0.isPresent }.count)")
-                                                    .foregroundColor(.red)
-                                            }
-                                            .font(.subheadline)
-                                            .foregroundColor(.gray)
-                                        }
-                                        Spacer()
-                                        if authManager.currentUser?.isAdmin == true ||
-                                           authManager.currentUser?.id == party.creatorId {
-                                            Button(action: {
-                                                Task {
-                                                    do {
-                                                        try await partyManager.deleteParty(party.id)
-                                                        await authManager.removePartyFromActive(party.id)
-                                                    } catch {
-                                                        errorMessage = error.localizedDescription
-                                                        showingError = true
-                                                    }
-                                                }
-                                            }) {
-                                                Image(systemName: "trash")
-                                                    .foregroundColor(.red)
-                                            }
-                                            .padding(.trailing, 8)
-                                        }
-                                        Image(systemName: "chevron.right")
-                                            .foregroundColor(.gray)
-                                    }
-                                }
-                                .foregroundColor(.primary)
+                ScrollView {
+                    VStack(spacing: Theme.Spacing.large) {
+                        if authManager.isAuthenticated {
+                            // Create & Join Buttons
+                            VStack(spacing: Theme.Spacing.medium) {
+                                PrimaryButton(
+                                    title: "Create Party",
+                                    action: { showingCreateParty = true }
+                                )
+                                
+                                SecondaryButton(
+                                    title: "Join Party",
+                                    action: { showingJoinParty = true }
+                                )
                             }
-                            .listStyle(PlainListStyle())
+                            .padding(.horizontal)
+                            
+                            // Active Parties Section
+                            VStack(alignment: .leading, spacing: Theme.Spacing.medium) {
+                                Text(authManager.currentUser?.isAdmin == true ? "All Parties" : "Your Active Parties")
+                                    .font(.headline)
+                                    .foregroundColor(Theme.Colors.textPrimary(colorScheme))
+                                    .padding(.horizontal)
+                                
+                                ForEach(authManager.activeParties) { party in
+                                    PartyCard(
+                                        name: party.name,
+                                        passcode: party.passcode,
+                                        creatorId: party.creatorId,
+                                        currentUserId: authManager.currentUser?.id,
+                                        action: {
+                                            partyManager.setCurrentParty(party)
+                                            showingAttendeeList = true
+                                        },
+                                        onDelete: {
+                                            Task {
+                                                do {
+                                                    try await partyManager.deleteParty(party.id)
+                                                    await authManager.removePartyFromActive(party.id)
+                                                } catch {
+                                                    print("Error deleting party:", error.localizedDescription)
+                                                }
+                                            }
+                                        },
+                                        onRemove: {
+                                            Task {
+                                                do {
+                                                    if let userId = authManager.currentUser?.id,
+                                                       party.editors.contains(userId) {
+                                                        try await partyManager.removeEditor(userId)
+                                                    }
+                                                    await authManager.removePartyFromActive(party.id)
+                                                } catch {
+                                                    print("Error removing party:", error.localizedDescription)
+                                                }
+                                            }
+                                        }
+                                    )
+                                    .padding(.horizontal)
+                                }
+                            }
+                        } else {
+                            // Login prompt
+                            VStack(spacing: Theme.Spacing.medium) {
+                                Text("Welcome to Party")
+                                    .font(.title)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(Theme.Colors.textPrimary(colorScheme))
+                                
+                                Text("Sign in to create or join parties")
+                                    .foregroundColor(Theme.Colors.textSecondary(colorScheme))
+                                
+                                PrimaryButton(
+                                    title: "Sign In",
+                                    action: { showingLoginSheet = true }
+                                )
+                            }
+                            .padding()
                         }
+                    }
+                    .padding(.vertical)
+                }
+            }
+            .navigationTitle("Party")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    if authManager.isAuthenticated {
+                        Button("Account") {
+                            showingAccount = true
+                        }
+                        .foregroundColor(Theme.Colors.textPrimary(colorScheme))
+                    } else {
+                        Button("Sign In") {
+                            showingLoginSheet = true
+                        }
+                        .foregroundColor(Theme.Colors.textPrimary(colorScheme))
                     }
                 }
             }
-            .navigationDestination(isPresented: $showingAttendeeList) {
-                AttendeeListView()
+            .sheet(isPresented: $showingLoginSheet) {
+                LoginView()
             }
             .sheet(isPresented: $showingCreateParty) {
                 NavigationView {
-                    Form {
-                        Section(header: Text("Party Information")) {
-                            TextField("Party Name", text: $partyName)
-                                .textInputAutocapitalization(.words)
+                    ZStack {
+                        Theme.Colors.background(colorScheme)
+                            .ignoresSafeArea()
+                        
+                        VStack(spacing: Theme.Spacing.large) {
+                            AppTextField(placeholder: "Party Name", text: $partyName)
+                            
+                            if showError {
+                                Text(errorMessage)
+                                    .foregroundColor(Theme.Colors.error)
+                                    .font(.caption)
+                            }
+                            
+                            PrimaryButton(
+                                title: "Create Party",
+                                action: createParty,
+                                isLoading: isLoading
+                            )
                         }
+                        .padding()
                     }
                     .navigationTitle("Create Party")
-                    .navigationBarItems(
-                        leading: Button("Cancel") {
-                            showingCreateParty = false
-                            partyName = ""
-                        },
-                        trailing: Button("Create") {
-                            createParty()
-                        }
-                        .disabled(partyName.isEmpty)
-                    )
-                }
-            }
-            .sheet(isPresented: $showingLogin) {
-                LoginView(authManager: authManager)
-            }
-            .alert("Error", isPresented: $showingError, presenting: errorMessage) { _ in
-                Button("OK", role: .cancel) { }
-            } message: { error in
-                Text(error)
-            }
-            .toolbar {
-                if authManager.isAuthenticated {
-                    Button(action: {
-                        Task {
-                            do {
-                                try await authManager.signOut()
-                            } catch {
-                                errorMessage = error.localizedDescription
-                                showingError = true
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarLeading) {
+                            Button("Cancel") {
+                                showingCreateParty = false
+                                partyName = ""
                             }
+                            .foregroundColor(Theme.Colors.textPrimary(colorScheme))
                         }
-                    }) {
-                        HStack {
-                            Text(authManager.currentUser?.email ?? "")
-                                .foregroundColor(.primary)
-                            Image(systemName: "rectangle.portrait.and.arrow.right")
-                        }
-                    }
-                } else {
-                    Button(action: { showingLogin = true }) {
-                        Image(systemName: "person.circle")
                     }
                 }
             }
+            .sheet(isPresented: $showingJoinParty) {
+                NavigationView {
+                    ZStack {
+                        Theme.Colors.background(colorScheme)
+                            .ignoresSafeArea()
+                        
+                        VStack(spacing: Theme.Spacing.large) {
+                            AppTextField(placeholder: "Party Passcode", text: $passcode)
+                                .keyboardType(.numberPad)
+                            
+                            if showError {
+                                Text(errorMessage)
+                                    .foregroundColor(Theme.Colors.error)
+                                    .font(.caption)
+                            }
+                            
+                            PrimaryButton(
+                                title: "Join Party",
+                                action: joinParty,
+                                isLoading: isLoading
+                            )
+                        }
+                        .padding()
+                    }
+                    .navigationTitle("Join Party")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarLeading) {
+                            Button("Cancel") {
+                                showingJoinParty = false
+                                passcode = ""
+                            }
+                            .foregroundColor(Theme.Colors.textPrimary(colorScheme))
+                        }
+                    }
+                }
+            }
+            .fullScreenCover(isPresented: $showingAttendeeList) {
+                AttendeeListView()
+            }
+            .sheet(isPresented: $showingAccount) {
+                AccountView()
+            }
+        }
+        .environmentObject(authManager)
+        .environmentObject(partyManager)
+        .onAppear {
+            partyManager.setAuthManager(authManager)
+            authManager.setPartyManager(partyManager)
         }
     }
     
     private func createParty() {
+        guard !partyName.isEmpty else {
+            showError = true
+            errorMessage = "Please enter a party name"
+            return
+        }
+        
+        guard let userId = authManager.currentUser?.id else {
+            showError = true
+            errorMessage = "You must be signed in to create a party"
+            return
+        }
+        
+        isLoading = true
+        showError = false
+        
+        // Generate a random 6-digit passcode
+        let passcode = String(format: "%06d", Int.random(in: 0...999999))
+        
         Task {
             do {
-                guard let userId = authManager.currentUser?.id else {
-                    showingLogin = true
-                    return
-                }
-                let randomPasscode = String(format: "%06d", Int.random(in: 0...999999))
-                try await partyManager.createParty(name: partyName, passcode: randomPasscode, creatorId: userId)
-                
+                try await partyManager.createParty(name: partyName, passcode: passcode, creatorId: userId)
+                // Add the party to user's active parties
                 if let partyId = partyManager.currentParty?.id {
                     try await authManager.addPartyToActive(partyId)
                 }
-                
                 showingCreateParty = false
-                showingAttendeeList = true
                 partyName = ""
+                showingAttendeeList = true
             } catch {
+                showError = true
                 errorMessage = error.localizedDescription
-                showingError = true
             }
+            isLoading = false
         }
     }
     
     private func joinParty() {
+        guard !passcode.isEmpty else {
+            showError = true
+            errorMessage = "Please enter a passcode"
+            return
+        }
+        
+        isLoading = true
+        showError = false
+        
         Task {
             do {
                 try await partyManager.joinParty(withPasscode: passcode)
-                if authManager.isAuthenticated {
-                    try await authManager.addPartyToActive(partyManager.currentParty?.id ?? "")
+                // Add the party to user's active parties
+                if let partyId = partyManager.currentParty?.id {
+                    try await authManager.addPartyToActive(partyId)
                 }
+                showingJoinParty = false
+                passcode = ""
                 showingAttendeeList = true
-                resetFields()
             } catch {
+                showError = true
                 errorMessage = error.localizedDescription
-                showingError = true
             }
+            isLoading = false
         }
-    }
-    
-    private func resetFields() {
-        partyName = ""
-        passcode = ""
     }
 }
 
 #Preview {
     MainView()
-        .environmentObject(PartyManager.preview)
-        .environmentObject(AuthManager())
 } 
