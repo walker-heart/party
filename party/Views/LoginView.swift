@@ -1,5 +1,6 @@
 import SwiftUI
 import FirebaseAuth
+import GoogleSignInSwift
 
 struct LoginView: View {
     @Environment(\.dismiss) private var dismiss
@@ -11,6 +12,9 @@ struct LoginView: View {
     @State private var showError = false
     @State private var errorMessage = ""
     @State private var showingCreateAccount = false
+    @State private var showingPasswordResetConfirmation = false
+    @State private var showingPasswordResetSuccess = false
+    @State private var isWrongPassword = false
     
     var body: some View {
         NavigationView {
@@ -51,6 +55,15 @@ struct LoginView: View {
                             text: $password,
                             textContentType: .password
                         )
+                        
+                        HStack {
+                            Spacer()
+                            Button("Forgot Password?") {
+                                showingPasswordResetConfirmation = true
+                            }
+                            .foregroundColor(Theme.Colors.primary)
+                            .font(.subheadline)
+                        }
                     }
                     
                     if showError {
@@ -64,6 +77,14 @@ struct LoginView: View {
                         action: signIn,
                         isLoading: isLoading
                     )
+                    .padding(.top, Theme.Spacing.small)
+                    
+                    Text("or")
+                        .foregroundColor(Theme.Colors.textSecondary(colorScheme))
+                        .padding(.vertical, Theme.Spacing.small)
+                    
+                    GoogleSignInButton(action: signInWithGoogle)
+                        .frame(height: 44)
                     
                     Button(action: { showingCreateAccount = true }) {
                         Text("Create Account")
@@ -75,6 +96,19 @@ struct LoginView: View {
             .navigationBarHidden(true)
             .sheet(isPresented: $showingCreateAccount) {
                 CreateAccountView(isShowing: $showingCreateAccount)
+            }
+            .alert("Reset Password", isPresented: $showingPasswordResetConfirmation) {
+                Button("Send Reset Email", role: .destructive) {
+                    resetPassword()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("We'll send you an email with instructions to reset your password.")
+            }
+            .alert("Password Reset Email Sent", isPresented: $showingPasswordResetSuccess) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Check your email for instructions to reset your password.")
             }
         }
     }
@@ -94,10 +128,58 @@ struct LoginView: View {
         
         isLoading = true
         showError = false
+        isWrongPassword = false
         
         Task {
             do {
                 try await authManager.signIn(email: email, password: password)
+                dismiss()
+            } catch let error as NSError {
+                showError = true
+                errorMessage = error.localizedDescription
+                
+                // Check for wrong password or invalid email errors
+                if error.domain == AuthErrorDomain {
+                    switch error.code {
+                    case AuthErrorCode.wrongPassword.rawValue,
+                         AuthErrorCode.invalidEmail.rawValue,
+                         AuthErrorCode.userNotFound.rawValue:
+                        isWrongPassword = true
+                    default:
+                        break
+                    }
+                }
+            }
+            isLoading = false
+        }
+    }
+    
+    private func resetPassword() {
+        guard !email.isEmpty else {
+            showError = true
+            errorMessage = "Please enter your email"
+            return
+        }
+        
+        Task {
+            do {
+                try await Auth.auth().sendPasswordReset(withEmail: email)
+                showingPasswordResetSuccess = true
+                showError = false
+            } catch {
+                showError = true
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+    
+    private func signInWithGoogle() {
+        isLoading = true
+        showError = false
+        
+        Task {
+            do {
+                try await authManager.signInWithGoogle()
                 dismiss()
             } catch {
                 showError = true
