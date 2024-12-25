@@ -83,8 +83,8 @@ struct LoginView: View {
                         .foregroundColor(Theme.Colors.textSecondary(colorScheme))
                         .padding(.vertical, Theme.Spacing.small)
                     
-                    GoogleSignInButton(action: signInWithGoogle)
-                        .frame(height: 44)
+                    CustomGoogleSignInButton(action: signInWithGoogle)
+                        .padding(.horizontal, Theme.Spacing.small)
                     
                     Button(action: { showingCreateAccount = true }) {
                         Text("Create Account")

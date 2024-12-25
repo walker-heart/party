@@ -1,4 +1,5 @@
 import SwiftUI
+import GoogleSignInSwift
 
 struct PrimaryButton: View {
     let title: String
@@ -209,6 +210,36 @@ struct StatusBadge: View {
             .padding(.vertical, 6)
             .background(isPresent ? Theme.Colors.success : Theme.Colors.error)
             .cornerRadius(Theme.CornerRadius.small)
+    }
+}
+
+struct CustomGoogleSignInButton: View {
+    let action: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+    
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image("google_logo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 20, height: 20)
+                
+                Text("Continue with Google")
+                    .font(.system(size: 16, weight: .semibold))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .padding(.horizontal, 16)
+            .background(colorScheme == .dark ? Color(white: 0.15) : .white)
+            .foregroundColor(colorScheme == .dark ? .white : Color.black.opacity(0.54))
+            .cornerRadius(4)
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(colorScheme == .dark ? Color.white.opacity(0.15) : Color.black.opacity(0.2), lineWidth: 1)
+            )
+            .shadow(color: colorScheme == .dark ? .clear : Color.black.opacity(0.05), radius: 1, x: 0, y: 1)
+        }
     }
 }
 

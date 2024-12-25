@@ -352,14 +352,14 @@ final class AuthManager: ObservableObject {
     }
     
     func handleGoogleSignIn(user: GIDGoogleUser?) async throws {
-        guard let user = user,
-              let idToken = user.idToken?.tokenString else {
+        guard let googleUser = user,
+              let idToken = googleUser.idToken?.tokenString else {
             throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unable to get ID token"])
         }
         
         let credential = GoogleAuthProvider.credential(
             withIDToken: idToken,
-            accessToken: user.accessToken.tokenString
+            accessToken: googleUser.accessToken.tokenString
         )
         
         do {
@@ -378,8 +378,8 @@ final class AuthManager: ObservableObject {
                 let newUser = User(
                     id: authResult.user.uid,
                     email: authResult.user.email ?? "",
-                    firstName: user.profile?.givenName ?? "",
-                    lastName: user.profile?.familyName ?? "",
+                    firstName: googleUser.profile?.givenName ?? "",
+                    lastName: googleUser.profile?.familyName ?? "",
                     authProviders: ["google.com"]
                 )
                 try await saveUserData(newUser)
@@ -393,7 +393,7 @@ final class AuthManager: ObservableObject {
     }
     
     func updateUserProfile(firstName: String, lastName: String) async throws {
-        guard var user = currentUser else {
+        guard let user = currentUser else {
             throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
         }
         
@@ -444,7 +444,7 @@ final class AuthManager: ObservableObject {
         let credential = EmailAuthProvider.credential(withEmail: emailToUse, password: password)
         
         // Link the credential to the current user
-        let result = try await currentUser.link(with: credential)
+        _ = try await currentUser.link(with: credential)
         
         // Update the user's auth providers in Firestore
         if var user = self.currentUser, !user.authProviders.contains("password") {
@@ -535,7 +535,7 @@ final class AuthManager: ObservableObject {
             try await currentUser.reauthenticate(with: credential)
             
             // If reauthentication successful, unlink password provider
-            try await currentUser.unlink(fromProvider: "password")
+            _ = try await currentUser.unlink(fromProvider: "password")
             
             // Update Firestore
             var updatedUser = user
@@ -544,7 +544,7 @@ final class AuthManager: ObservableObject {
             self.currentUser = updatedUser
             
         case "google.com":
-            try await currentUser.unlink(fromProvider: "google.com")
+            _ = try await currentUser.unlink(fromProvider: "google.com")
             
             // Update Firestore
             var updatedUser = user
