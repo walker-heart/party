@@ -67,6 +67,19 @@ struct AttendeeListView: View {
                         if let party = partyManager.currentParty,
                            let userId = authManager.currentUser?.id {
                             if party.creatorId == userId || authManager.currentUser?.isAdmin == true || party.editors.contains(userId) {
+                                // URL Button
+                                Button(action: {
+                                    let shortId = String(party.creatorId.prefix(6))
+                                    let formattedName = party.name.lowercased().replacingOccurrences(of: " ", with: "-")
+                                    let urlString = "https://test.com/\(shortId)/\(formattedName)"
+                                    if let url = URL(string: urlString) {
+                                        UIApplication.shared.open(url)
+                                    }
+                                }) {
+                                    Image(systemName: "square.and.arrow.up")
+                                        .foregroundColor(Theme.Colors.primary)
+                                }
+                                
                                 Button(action: { showingSettings = true }) {
                                     Image(systemName: "gear")
                                         .foregroundColor(Theme.Colors.primary)

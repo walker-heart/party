@@ -1,6 +1,7 @@
 import SwiftUI
 import FirebaseAuth
 import GoogleSignInSwift
+import AuthenticationServices
 
 struct LoginView: View {
     @Environment(\.dismiss) private var dismiss
@@ -90,6 +91,32 @@ struct LoginView: View {
                         Text("Create Account")
                             .foregroundColor(Theme.Colors.primary)
                     }
+                    
+                    // Social Sign-in Buttons
+                    VStack(spacing: Theme.Spacing.medium) {
+                        // Google Sign-in Button (if you have it)
+                        
+                        // Apple Sign-in Button
+                        SignInWithAppleButton(
+                            onRequest: { request in
+                                request.requestedScopes = [.fullName, .email]
+                            },
+                            onCompletion: { result in
+                                Task {
+                                    do {
+                                        try await authManager.signInWithApple()
+                                        dismiss()
+                                    } catch {
+                                        errorMessage = error.localizedDescription
+                                        showError = true
+                                    }
+                                }
+                            }
+                        )
+                        .frame(height: 44)
+                        .cornerRadius(8)
+                    }
+                    .padding(.horizontal)
                 }
                 .padding()
             }

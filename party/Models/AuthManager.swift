@@ -5,6 +5,8 @@ import GoogleSignIn
 import GoogleSignInSwift
 import FirebaseCore
 import UIKit
+import AuthenticationServices
+import CryptoKit
 
 @MainActor
 final class AuthManager: ObservableObject {
@@ -17,6 +19,8 @@ final class AuthManager: ObservableObject {
     private let usersCollection = "users"
     private let partiesCollection = "party"
     private var partyManager: PartyManager?
+    
+    private var appleSignInDelegate: SignInWithAppleDelegate?
     
     init(auth: Auth = Auth.auth(), db: Firestore = Firestore.firestore()) {
         self.auth = auth
@@ -69,9 +73,14 @@ final class AuthManager: ObservableObject {
         
         // Update user data to ensure it has all fields and current provider
         var updatedUser = user
-        if let currentProvider = auth.currentUser?.providerData.first?.providerID,
-           !user.authProviders.contains(currentProvider) {
-            updatedUser.authProviders.append(currentProvider)
+        let currentProviders = auth.currentUser?.providerData.map { $0.providerID } ?? []
+        for provider in currentProviders {
+            if !user.authProviders.contains(provider) {
+                updatedUser.authProviders.append(provider)
+            }
+        }
+        
+        if updatedUser.authProviders != user.authProviders {
             try await saveUserData(updatedUser)
         }
         
@@ -207,7 +216,22 @@ final class AuthManager: ObservableObject {
             throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid user ID"])
         }
         
-        let data = try Firestore.Encoder().encode(user)
+        // Get existing user data to preserve providers
+        var updatedUser = user
+        if let existingUser = try? await getUserById(user.id) {
+            // Keep existing providers and add new ones
+            updatedUser.authProviders = existingUser.authProviders
+            if let currentUser = auth.currentUser {
+                let currentProviders = currentUser.providerData.map { $0.providerID }
+                for provider in currentProviders {
+                    if !updatedUser.authProviders.contains(provider) {
+                        updatedUser.authProviders.append(provider)
+                    }
+                }
+            }
+        }
+        
+        let data = try Firestore.Encoder().encode(updatedUser)
         try await db.collection(usersCollection).document(user.id).setData(data)
     }
     
@@ -348,7 +372,37 @@ final class AuthManager: ObservableObject {
         }
         
         let result = try await GIDSignIn.sharedInstance.signIn(withPresenting: root)
-        try await handleGoogleSignIn(user: result.user)
+        guard let idToken = result.user.idToken?.tokenString,
+              let email = result.user.profile?.email else {
+            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unable to get Google ID token or email"])
+        }
+        
+        let credential = GoogleAuthProvider.credential(
+            withIDToken: idToken,
+            accessToken: result.user.accessToken.tokenString
+        )
+        
+        // Check if email exists
+        if let existingUserId = try? await getUserIdByEmail(email) {
+            // Email exists, link Google credential
+            if let currentUser = auth.currentUser, currentUser.uid == existingUserId {
+                try await currentUser.link(with: credential)
+            } else {
+                try await auth.signIn(with: credential)
+            }
+        } else {
+            // New user, create account
+            let authResult = try await auth.signIn(with: credential)
+            let newUser = User(
+                id: authResult.user.uid,
+                email: email,
+                firstName: result.user.profile?.givenName ?? "",
+                lastName: result.user.profile?.familyName ?? "",
+                authProviders: ["google.com"]
+            )
+            try await saveUserData(newUser)
+        }
+        try await fetchUserData(userId: auth.currentUser?.uid ?? "")
     }
     
     func handleGoogleSignIn(user: GIDGoogleUser?) async throws {
@@ -555,5 +609,172 @@ final class AuthManager: ObservableObject {
         default:
             throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unsupported authentication provider"])
         }
+    }
+    
+    func signInWithApple() async throws {
+        // Clear any existing delegate
+        self.appleSignInDelegate = nil
+        
+        let nonce = randomNonceString()
+        let appleIDProvider = ASAuthorizationAppleIDProvider()
+        let request = appleIDProvider.createRequest()
+        request.requestedScopes = [.fullName, .email]
+        request.nonce = sha256(nonce)
+        
+        let controller = ASAuthorizationController(authorizationRequests: [request])
+        
+        // Store delegate as a property to prevent deallocation
+        self.appleSignInDelegate = SignInWithAppleDelegate { [weak self] result in
+            guard let self = self else { return }
+            
+            switch result {
+            case .success(let authorization):
+                if let appleIDCredential = authorization.credential as? ASAuthorizationAppleIDCredential,
+                   let appleIDToken = appleIDCredential.identityToken,
+                   let idTokenString = String(data: appleIDToken, encoding: .utf8) {
+                    
+                    Task { @MainActor in
+                        do {
+                            let credential = OAuthProvider.appleCredential(
+                                withIDToken: idTokenString,
+                                rawNonce: nonce,
+                                fullName: appleIDCredential.fullName
+                            )
+                            
+                            let email = appleIDCredential.email ?? self.auth.currentUser?.email
+                            
+                            // If we have an email, check if it exists
+                            if let email = email,
+                               let existingUserId = try? await self.getUserIdByEmail(email) {
+                                // Email exists, link Apple credential
+                                if let currentUser = self.auth.currentUser,
+                                   currentUser.uid == existingUserId {
+                                    try await currentUser.link(with: credential)
+                                } else {
+                                    try await self.auth.signIn(with: credential)
+                                }
+                            } else {
+                                // New user or no email, create account
+                                let authResult = try await self.auth.signIn(with: credential)
+                                if let email = email {
+                                    let newUser = User(
+                                        id: authResult.user.uid,
+                                        email: email,
+                                        firstName: appleIDCredential.fullName?.givenName ?? "",
+                                        lastName: appleIDCredential.fullName?.familyName ?? "",
+                                        authProviders: ["apple.com"]
+                                    )
+                                    try await self.saveUserData(newUser)
+                                }
+                            }
+                            
+                            try await self.fetchUserData(userId: self.auth.currentUser?.uid ?? "")
+                            // Clear the delegate after successful sign in
+                            self.appleSignInDelegate = nil
+                        } catch {
+                            print("Error signing in with Apple:", error.localizedDescription)
+                            // Clear the delegate on error
+                            self.appleSignInDelegate = nil
+                        }
+                    }
+                }
+            case .failure(let error):
+                print("Apple sign in failed:", error.localizedDescription)
+                // Clear the delegate on failure
+                self.appleSignInDelegate = nil
+            }
+        }
+        
+        controller.delegate = self.appleSignInDelegate
+        controller.presentationContextProvider = self.appleSignInDelegate
+        controller.performRequests()
+    }
+    
+    private func randomNonceString(length: Int = 32) -> String {
+        precondition(length > 0)
+        var randomBytes = [UInt8](repeating: 0, count: length)
+        let errorCode = SecRandomCopyBytes(kSecRandomDefault, randomBytes.count, &randomBytes)
+        if errorCode != errSecSuccess {
+            fatalError("Unable to generate nonce. SecRandomCopyBytes failed with OSStatus \(errorCode)")
+        }
+        
+        let charset: [Character] =
+        Array("0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._")
+        
+        let nonce = randomBytes.map { byte in
+            charset[Int(byte) % charset.count]
+        }
+        
+        return String(nonce)
+    }
+    
+    private func sha256(_ input: String) -> String {
+        let inputData = Data(input.utf8)
+        let hashedData = SHA256.hash(data: inputData)
+        let hashString = hashedData.compactMap {
+            String(format: "%02x", $0)
+        }.joined()
+        
+        return hashString
+    }
+    
+    func deleteAccount() async throws {
+        guard let currentUser = auth.currentUser else {
+            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "No user is currently signed in"])
+        }
+        
+        guard let user = self.currentUser else {
+            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "User data not found"])
+        }
+        
+        // Clean up user data
+        // 1. Remove user from all party editor lists
+        let partiesSnapshot = try await db.collection(partiesCollection).whereField("editors", arrayContains: user.id).getDocuments()
+        for document in partiesSnapshot.documents {
+            // Update the editors array directly in Firestore
+            try await db.collection(partiesCollection).document(document.documentID).updateData([
+                "editors": FieldValue.arrayRemove([user.id])
+            ])
+        }
+        
+        // 2. Delete user document from Firestore
+        try await db.collection(usersCollection).document(user.id).delete()
+        
+        // 3. Delete Firebase Auth account
+        try await currentUser.delete()
+        
+        // 4. Reset local state
+        resetState()
+    }
+}
+
+// Helper class to handle Apple Sign In delegate methods
+private class SignInWithAppleDelegate: NSObject, ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
+    private let handler: (Result<ASAuthorization, Error>) -> Void
+    private var window: UIWindow?
+    
+    init(handler: @escaping (Result<ASAuthorization, Error>) -> Void) {
+        self.handler = handler
+        super.init()
+        
+        // Store window reference
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+            self.window = windowScene.windows.first
+        }
+    }
+    
+    func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
+        guard let window = self.window ?? (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.windows.first else {
+            fatalError("No window found")
+        }
+        return window
+    }
+    
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
+        handler(.success(authorization))
+    }
+    
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
+        handler(.failure(error))
     }
 }

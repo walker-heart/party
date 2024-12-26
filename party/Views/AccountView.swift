@@ -21,6 +21,8 @@ struct AccountView: View {
     @State private var isLinkingGoogle = false
     @State private var showingPasswordVerification = false
     @State private var verificationPassword = ""
+    @State private var showingDeletePasswordVerification = false
+    @State private var deleteAccountPassword = ""
     
     var body: some View {
         NavigationView {
@@ -110,8 +112,8 @@ struct AccountView: View {
                                     
                                     ForEach(user.authProviders, id: \.self) { provider in
                                         HStack {
-                                            Image(systemName: provider == "password" ? "key.fill" : "g.circle.fill")
-                                            Text(provider == "password" ? "Email and Password" : "Google")
+                                            Image(systemName: getProviderIcon(provider))
+                                            Text(getProviderDisplayName(provider))
                                             
                                             Spacer()
                                             
@@ -201,7 +203,7 @@ struct AccountView: View {
             }
             .alert("Delete Account", isPresented: $showingDeleteConfirmation) {
                 Button("Delete", role: .destructive) {
-                    // TODO: Implement account deletion
+                    deleteAccount()
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
@@ -260,30 +262,13 @@ struct AccountView: View {
                         
                         VStack(spacing: Theme.Spacing.large) {
                             VStack(spacing: Theme.Spacing.medium) {
-                                if let user = authManager.currentUser,
-                                   user.authProviders.contains("google.com") {
-                                    // For Google users, just show the existing email and password field
+                                if let user = authManager.currentUser {
                                     Text(user.email)
                                         .font(.headline)
                                         .foregroundColor(Theme.Colors.textPrimary(colorScheme))
                                     
                                     AppSecureField(
                                         placeholder: "New Password",
-                                        text: $password,
-                                        textContentType: .newPassword
-                                    )
-                                } else {
-                                    // For new users, show both email and password fields
-                                    AppTextField(
-                                        placeholder: "Email",
-                                        text: $email
-                                    )
-                                    .textContentType(.emailAddress)
-                                    .keyboardType(.emailAddress)
-                                    .autocapitalization(.none)
-                                    
-                                    AppSecureField(
-                                        placeholder: "Password",
                                         text: $password,
                                         textContentType: .newPassword
                                     )
@@ -310,7 +295,6 @@ struct AccountView: View {
                         ToolbarItem(placement: .navigationBarLeading) {
                             Button("Cancel") {
                                 showingAddEmailPassword = false
-                                email = ""
                                 password = ""
                                 showError = false
                             }
@@ -390,15 +374,15 @@ struct AccountView: View {
     }
     
     private func addEmailPassword() {
-        if let user = authManager.currentUser,
-           user.authProviders.contains("google.com") {
-            // For Google users, use their existing email
-            email = user.email
-        }
-        
         guard !password.isEmpty else {
             showError = true
             errorMessage = "Please enter a password"
+            return
+        }
+        
+        guard let user = authManager.currentUser else {
+            showError = true
+            errorMessage = "No user found"
             return
         }
         
@@ -407,9 +391,8 @@ struct AccountView: View {
         
         Task {
             do {
-                try await authManager.linkEmailPassword(email: email, password: password)
+                try await authManager.linkEmailPassword(email: user.email, password: password)
                 showingAddEmailPassword = false
-                email = ""
                 password = ""
             } catch {
                 showError = true
@@ -442,6 +425,44 @@ struct AccountView: View {
                 showError = true
                 errorMessage = error.localizedDescription
             }
+        }
+    }
+    
+    private func deleteAccount(password: String? = nil) {
+        Task {
+            do {
+                try await authManager.deleteAccount()
+                dismiss()
+            } catch {
+                showError = true
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+    
+    private func getProviderIcon(_ provider: String) -> String {
+        switch provider {
+        case "password":
+            return "key.fill"
+        case "google.com":
+            return "g.circle.fill"
+        case "apple.com":
+            return "apple.logo"
+        default:
+            return "questionmark.circle.fill"
+        }
+    }
+    
+    private func getProviderDisplayName(_ provider: String) -> String {
+        switch provider {
+        case "password":
+            return "Email and Password"
+        case "google.com":
+            return "Google"
+        case "apple.com":
+            return "Apple"
+        default:
+            return provider
         }
     }
 }
