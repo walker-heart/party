@@ -73,15 +73,19 @@ final class AuthManager: ObservableObject {
         
         // Update user data to ensure it has all fields and current provider
         var updatedUser = user
-        let currentProviders = auth.currentUser?.providerData.map { $0.providerID } ?? []
-        for provider in currentProviders {
-            if !user.authProviders.contains(provider) {
-                updatedUser.authProviders.append(provider)
-            }
-        }
         
-        if updatedUser.authProviders != user.authProviders {
-            try await saveUserData(updatedUser)
+        // Get current providers from Firebase Auth
+        if let currentUser = auth.currentUser {
+            let currentProviders = Set(currentUser.providerData.map { $0.providerID })
+            let storedProviders = Set(user.authProviders)
+            
+            // If providers don't match, update Firestore to match Firebase Auth
+            if currentProviders != storedProviders {
+                // Only keep providers that exist in Firebase Auth
+                updatedUser.authProviders = Array(currentProviders)
+                try await saveUserData(updatedUser)
+                print("Synced providers: Firebase Auth has \(currentProviders), updated Firestore from \(storedProviders)")
+            }
         }
         
         self.currentUser = updatedUser
@@ -216,19 +220,13 @@ final class AuthManager: ObservableObject {
             throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid user ID"])
         }
         
-        // Get existing user data to preserve providers
         var updatedUser = user
-        if let existingUser = try? await getUserById(user.id) {
-            // Keep existing providers and add new ones
-            updatedUser.authProviders = existingUser.authProviders
-            if let currentUser = auth.currentUser {
-                let currentProviders = currentUser.providerData.map { $0.providerID }
-                for provider in currentProviders {
-                    if !updatedUser.authProviders.contains(provider) {
-                        updatedUser.authProviders.append(provider)
-                    }
-                }
-            }
+        
+        // Always sync with Firebase Auth providers
+        if let currentUser = auth.currentUser {
+            let currentProviders = Set(currentUser.providerData.map { $0.providerID })
+            // Only save providers that actually exist in Firebase Auth
+            updatedUser.authProviders = Array(currentProviders)
         }
         
         let data = try Firestore.Encoder().encode(updatedUser)
@@ -478,7 +476,16 @@ final class AuthManager: ObservableObject {
             throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Email/password authentication is not enabled for this account"])
         }
         
+        // Store current providers before reset
+        let currentProviders = user.authProviders
+        
+        // Send reset email
         try await auth.sendPasswordReset(withEmail: user.email)
+        
+        // Ensure providers are preserved in Firestore
+        var updatedUser = user
+        updatedUser.authProviders = currentProviders
+        try await saveUserData(updatedUser)
     }
     
     func linkEmailPassword(email: String, password: String) async throws {

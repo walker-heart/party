@@ -23,6 +23,7 @@ struct AccountView: View {
     @State private var verificationPassword = ""
     @State private var showingDeletePasswordVerification = false
     @State private var deleteAccountPassword = ""
+    @State private var showingPasswordResetWarning = false
     
     var body: some View {
         NavigationView {
@@ -119,7 +120,7 @@ struct AccountView: View {
                                             
                                             if provider == "password" {
                                                 Button("Reset Password") {
-                                                    showingPasswordResetConfirmation = true
+                                                    showingPasswordResetWarning = true
                                                 }
                                                 .foregroundColor(Theme.Colors.primary)
                                                 .font(.subheadline)
@@ -209,7 +210,15 @@ struct AccountView: View {
             } message: {
                 Text("Are you sure you want to delete your account? This action cannot be undone.")
             }
-            .alert("Reset Password", isPresented: $showingPasswordResetConfirmation) {
+            .alert("Warning", isPresented: $showingPasswordResetWarning) {
+                Button("Reset Password", role: .destructive) {
+                    showingPasswordResetConfirmation = true
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Resetting your password will remove all other authentication providers (Google, Apple). Are you sure you want to continue?")
+            }
+            .alert("Reset Password?", isPresented: $showingPasswordResetConfirmation) {
                 Button("Send Reset Email", role: .destructive) {
                     resetPassword()
                 }

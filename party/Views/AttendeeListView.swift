@@ -71,12 +71,12 @@ struct AttendeeListView: View {
                                 Button(action: {
                                     let shortId = String(party.creatorId.prefix(6))
                                     let formattedName = party.name.lowercased().replacingOccurrences(of: " ", with: "-")
-                                    let urlString = "https://test.com/\(shortId)/\(formattedName)"
+                                    let urlString = "https://wplister.replit.app/\(shortId)/\(formattedName)"
                                     if let url = URL(string: urlString) {
                                         UIApplication.shared.open(url)
                                     }
                                 }) {
-                                    Image(systemName: "square.and.arrow.up")
+                                    Image(systemName: "tray.and.arrow.down")
                                         .foregroundColor(Theme.Colors.primary)
                                 }
                                 

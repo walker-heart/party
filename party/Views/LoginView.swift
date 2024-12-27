@@ -190,6 +190,7 @@ struct LoginView: View {
         
         Task {
             do {
+                // Just send the reset email without modifying providers
                 try await Auth.auth().sendPasswordReset(withEmail: email)
                 showingPasswordResetSuccess = true
                 showError = false
