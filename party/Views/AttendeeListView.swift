@@ -70,7 +70,7 @@ struct AttendeeListView: View {
                             if party.creatorId == userId || authManager.currentUser?.isAdmin == true {
                                 Button(action: {
                                     let shortId = String(party.creatorId.prefix(6))
-                                    let formattedName = party.name.lowercased().replacingOccurrences(of: " ", with: "-")
+                                    let formattedName = party.name.lowercased().replacingOccurrences(of: " ", with: "%20")
                                     let urlString = "https://wplister.replit.app/\(shortId)/\(formattedName)"
                                     if let url = URL(string: urlString) {
                                         UIApplication.shared.open(url)
