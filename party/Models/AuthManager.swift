@@ -139,8 +139,25 @@ final class AuthManager: ObservableObject {
     }
     
     func signOut() async throws {
+        // Sign out from Firebase
         try auth.signOut()
+        
+        // Sign out from Google
+        GIDSignIn.sharedInstance.signOut()
+        
+        // Clear Apple session (if needed)
+        let appleIDProvider = ASAuthorizationAppleIDProvider()
+        appleIDProvider.getCredentialState(forUserID: currentUser?.id ?? "") { (credentialState, error) in
+            if credentialState == .authorized {
+                // Clear keychain items if needed
+                // Note: Apple doesn't provide direct sign out, but we can clear local state
+            }
+        }
+        
+        // Remove all party listeners
         removeAllPartyListeners()
+        
+        // Reset local state
         resetState()
     }
     
@@ -696,6 +713,15 @@ final class AuthManager: ObservableObject {
             try await saveUserData(updatedUser)
             self.currentUser = updatedUser
             
+        case "apple.com":
+            _ = try await currentUser.unlink(fromProvider: "apple.com")
+            
+            // Update Firestore
+            var updatedUser = user
+            updatedUser.authProviders.removeAll { $0 == "apple.com" }
+            try await saveUserData(updatedUser)
+            self.currentUser = updatedUser
+            
         default:
             throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unsupported authentication provider"])
         }
@@ -705,7 +731,6 @@ final class AuthManager: ObservableObject {
         let nonce = randomNonceString()
         
         return try await withCheckedThrowingContinuation { continuation in
-            // Create a new delegate for this sign-in attempt
             let signInDelegate = SignInWithAppleDelegate { [weak self] result in
                 Task { @MainActor [weak self] in
                     do {
@@ -728,24 +753,51 @@ final class AuthManager: ObservableObject {
                                 fullName: appleIDCredential.fullName
                             )
                             
-                            let email = appleIDCredential.email ?? self.auth.currentUser?.email
-                            
-                            if let email = email,
+                            // Check if user exists with this email
+                            if let email = appleIDCredential.email ?? auth.currentUser?.email,
                                let existingUserId = try? await self.getUserIdByEmail(email) {
-                                // Email exists, handle existing user
-                                if let currentUser = self.auth.currentUser,
-                                   currentUser.uid == existingUserId {
-                                    try await currentUser.link(with: credential)
+                                // Email exists, check if user is signed in
+                                if let currentUser = self.auth.currentUser {
+                                    if currentUser.uid == existingUserId {
+                                        // Same user, just link Apple provider
+                                        try await currentUser.link(with: credential)
+                                        if var user = self.currentUser {
+                                            if !user.authProviders.contains("apple.com") {
+                                                user.authProviders.append("apple.com")
+                                                try await self.saveUserData(user)
+                                            }
+                                        }
+                                    } else {
+                                        // Different user, try to sign in
+                                        try await self.auth.signIn(with: credential)
+                                        if var user = try? await self.getUserById(existingUserId) {
+                                            if !user.authProviders.contains("apple.com") {
+                                                // Preserve existing providers and add apple.com
+                                                user.authProviders.append("apple.com")
+                                                try await self.saveUserData(user)
+                                            }
+                                        }
+                                    }
                                 } else {
+                                    // Not signed in, sign in to existing account
                                     try await self.auth.signIn(with: credential)
+                                    if var user = try? await self.getUserById(existingUserId) {
+                                        if !user.authProviders.contains("apple.com") {
+                                            // Preserve existing providers and add apple.com
+                                            user.authProviders.append("apple.com")
+                                            try await self.saveUserData(user)
+                                        }
+                                    }
                                 }
                             } else {
-                                // New user or no email
+                                // New user, create account
                                 let authResult = try await self.auth.signIn(with: credential)
-                                if let email = email {
+                                
+                                // Only create new user data if it doesn't exist
+                                if try await self.getUserById(authResult.user.uid) == nil {
                                     let newUser = User(
                                         id: authResult.user.uid,
-                                        email: email,
+                                        email: appleIDCredential.email ?? authResult.user.email ?? "",
                                         firstName: appleIDCredential.fullName?.givenName ?? "",
                                         lastName: appleIDCredential.fullName?.familyName ?? "",
                                         authProviders: ["apple.com"]
@@ -758,7 +810,7 @@ final class AuthManager: ObservableObject {
                             continuation.resume()
                             
                         case .failure(let error):
-                            throw error
+                            continuation.resume(throwing: error)
                         }
                     } catch {
                         continuation.resume(throwing: error)
@@ -838,6 +890,19 @@ final class AuthManager: ObservableObject {
         
         // 4. Reset local state
         resetState()
+    }
+    
+    private func getUserByEmail(_ email: String) async throws -> User? {
+        let snapshot = try await db.collection(usersCollection)
+            .whereField("email", isEqualTo: email)
+            .getDocuments()
+        
+        guard let document = snapshot.documents.first,
+              let data = try? Firestore.Decoder().decode(User.self, from: document.data()) else {
+            return nil
+        }
+        
+        return data
     }
 }
 
