@@ -267,12 +267,29 @@ final class PartyManager: ObservableObject {
             throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid party ID"])
         }
         
-        let documentRef = db.collection(collectionName).document(partyId)
-        try await documentRef.delete()
-        
-        // If this was the current party, clear it
-        if currentParty?.id == partyId {
-            currentParty = nil
+        do {
+            let documentRef = db.collection(collectionName).document(partyId)
+            try await documentRef.delete()
+            
+            // If this was the current party, clear it
+            if currentParty?.id == partyId {
+                currentParty = nil
+            }
+        } catch let error as NSError {
+            // Handle network errors specifically
+            if error.domain == "NSPOSIXErrorDomain" && error.code == 50 {
+                throw NSError(
+                    domain: "PartyManagerError",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "Cannot delete party while offline. Please check your internet connection and try again."]
+                )
+            }
+            // For other errors, throw a generic message
+            throw NSError(
+                domain: "PartyManagerError",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to delete party. Please try again."]
+            )
         }
     }
     
