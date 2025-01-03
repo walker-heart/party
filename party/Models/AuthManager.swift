@@ -619,29 +619,26 @@ final class AuthManager: ObservableObject {
     }
     
     func signInWithApple() async throws {
-        // Clear any existing delegate
-        self.appleSignInDelegate = nil
-        
         let nonce = randomNonceString()
-        let appleIDProvider = ASAuthorizationAppleIDProvider()
-        let request = appleIDProvider.createRequest()
-        request.requestedScopes = [.fullName, .email]
-        request.nonce = sha256(nonce)
         
-        let controller = ASAuthorizationController(authorizationRequests: [request])
-        
-        // Store delegate as a property to prevent deallocation
-        self.appleSignInDelegate = SignInWithAppleDelegate { [weak self] result in
-            guard let self = self else { return }
-            
-            switch result {
-            case .success(let authorization):
-                if let appleIDCredential = authorization.credential as? ASAuthorizationAppleIDCredential,
-                   let appleIDToken = appleIDCredential.identityToken,
-                   let idTokenString = String(data: appleIDToken, encoding: .utf8) {
-                    
-                    Task { @MainActor in
-                        do {
+        return try await withCheckedThrowingContinuation { continuation in
+            // Create a new delegate for this sign-in attempt
+            let signInDelegate = SignInWithAppleDelegate { [weak self] result in
+                Task { @MainActor [weak self] in
+                    do {
+                        guard let self = self else {
+                            continuation.resume(throwing: NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Auth manager was deallocated"]))
+                            return
+                        }
+                        
+                        switch result {
+                        case .success(let authorization):
+                            guard let appleIDCredential = authorization.credential as? ASAuthorizationAppleIDCredential,
+                                  let appleIDToken = appleIDCredential.identityToken,
+                                  let idTokenString = String(data: appleIDToken, encoding: .utf8) else {
+                                throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unable to get Apple ID token"])
+                            }
+                            
                             let credential = OAuthProvider.appleCredential(
                                 withIDToken: idTokenString,
                                 rawNonce: nonce,
@@ -650,10 +647,9 @@ final class AuthManager: ObservableObject {
                             
                             let email = appleIDCredential.email ?? self.auth.currentUser?.email
                             
-                            // If we have an email, check if it exists
                             if let email = email,
                                let existingUserId = try? await self.getUserIdByEmail(email) {
-                                // Email exists, link Apple credential
+                                // Email exists, handle existing user
                                 if let currentUser = self.auth.currentUser,
                                    currentUser.uid == existingUserId {
                                     try await currentUser.link(with: credential)
@@ -661,7 +657,7 @@ final class AuthManager: ObservableObject {
                                     try await self.auth.signIn(with: credential)
                                 }
                             } else {
-                                // New user or no email, create account
+                                // New user or no email
                                 let authResult = try await self.auth.signIn(with: credential)
                                 if let email = email {
                                     let newUser = User(
@@ -676,25 +672,32 @@ final class AuthManager: ObservableObject {
                             }
                             
                             try await self.fetchUserData(userId: self.auth.currentUser?.uid ?? "")
-                            // Clear the delegate after successful sign in
-                            self.appleSignInDelegate = nil
-                        } catch {
-                            print("Error signing in with Apple:", error.localizedDescription)
-                            // Clear the delegate on error
-                            self.appleSignInDelegate = nil
+                            continuation.resume()
+                            
+                        case .failure(let error):
+                            throw error
                         }
+                    } catch {
+                        continuation.resume(throwing: error)
                     }
                 }
-            case .failure(let error):
-                print("Apple sign in failed:", error.localizedDescription)
-                // Clear the delegate on failure
-                self.appleSignInDelegate = nil
             }
+            
+            // Store delegate as a property to prevent deallocation
+            self.appleSignInDelegate = signInDelegate
+            
+            let appleIDProvider = ASAuthorizationAppleIDProvider()
+            let request = appleIDProvider.createRequest()
+            request.requestedScopes = [.fullName, .email]
+            request.nonce = sha256(nonce)
+            
+            let controller = ASAuthorizationController(authorizationRequests: [request])
+            controller.delegate = signInDelegate
+            controller.presentationContextProvider = signInDelegate
+            
+            // Start the sign-in flow
+            controller.performRequests()
         }
-        
-        controller.delegate = self.appleSignInDelegate
-        controller.presentationContextProvider = self.appleSignInDelegate
-        controller.performRequests()
     }
     
     private func randomNonceString(length: Int = 32) -> String {
@@ -757,24 +760,33 @@ final class AuthManager: ObservableObject {
 
 // Helper class to handle Apple Sign In delegate methods
 private class SignInWithAppleDelegate: NSObject, ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
-    private let handler: (Result<ASAuthorization, Error>) -> Void
-    private var window: UIWindow?
+    var handler: (Result<ASAuthorization, Error>) -> Void
+    private weak var window: UIWindow?
     
     init(handler: @escaping (Result<ASAuthorization, Error>) -> Void) {
         self.handler = handler
         super.init()
         
         // Store window reference
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
-            self.window = windowScene.windows.first
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let window = windowScene.windows.first {
+            self.window = window
         }
     }
     
     func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
-        guard let window = self.window ?? (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.windows.first else {
-            fatalError("No window found")
+        if let window = self.window {
+            return window
         }
-        return window
+        
+        // Fallback to getting a new window reference if the stored one is nil
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let window = windowScene.windows.first {
+            self.window = window
+            return window
+        }
+        
+        fatalError("No window found for Apple Sign In presentation")
     }
     
     func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {

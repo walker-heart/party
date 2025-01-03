@@ -91,21 +91,25 @@ struct LoginView: View {
                         onRequest: { request in
                             request.requestedScopes = [.fullName, .email]
                         },
-                        onCompletion: { result in
-                            Task {
-                                do {
-                                    try await authManager.signInWithApple()
-                                    dismiss()
-                                } catch {
-                                    errorMessage = error.localizedDescription
-                                    showError = true
-                                }
-                            }
-                        }
+                        onCompletion: { _ in }
                     )
                     .frame(height: 44)
                     .cornerRadius(8)
                     .padding(.horizontal, Theme.Spacing.small)
+                    .onTapGesture {
+                        Task {
+                            do {
+                                isLoading = true
+                                showError = false
+                                try await authManager.signInWithApple()
+                                dismiss()
+                            } catch {
+                                showError = true
+                                errorMessage = error.localizedDescription
+                            }
+                            isLoading = false
+                        }
+                    }
                     
                     Button(action: { showingCreateAccount = true }) {
                         Text("Create Account")
