@@ -12,4 +12,4 @@ DerivedData/
 *.dSYM
 *.dSYM.zip
 *.ipa
-*.xcarchive
+*.xcarchive*.xcbkptlist
