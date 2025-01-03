@@ -5,6 +5,8 @@ import GoogleSignIn
 import GoogleSignInSwift
 import FirebaseCore
 import UIKit
+import AuthenticationServices
+import CryptoKit
 
 @MainActor
 final class AuthManager: ObservableObject {
@@ -17,6 +19,8 @@ final class AuthManager: ObservableObject {
     private let usersCollection = "users"
     private let partiesCollection = "party"
     private var partyManager: PartyManager?
+    
+    private var appleSignInDelegate: SignInWithAppleDelegate?
     
     init(auth: Auth = Auth.auth(), db: Firestore = Firestore.firestore()) {
         self.auth = auth
@@ -69,10 +73,19 @@ final class AuthManager: ObservableObject {
         
         // Update user data to ensure it has all fields and current provider
         var updatedUser = user
-        if let currentProvider = auth.currentUser?.providerData.first?.providerID,
-           !user.authProviders.contains(currentProvider) {
-            updatedUser.authProviders.append(currentProvider)
-            try await saveUserData(updatedUser)
+        
+        // Get current providers from Firebase Auth
+        if let currentUser = auth.currentUser {
+            let currentProviders = Set(currentUser.providerData.map { $0.providerID })
+            let storedProviders = Set(user.authProviders)
+            
+            // If providers don't match, update Firestore to match Firebase Auth
+            if currentProviders != storedProviders {
+                // Only keep providers that exist in Firebase Auth
+                updatedUser.authProviders = Array(currentProviders)
+                try await saveUserData(updatedUser)
+                print("Synced providers: Firebase Auth has \(currentProviders), updated Firestore from \(storedProviders)")
+            }
         }
         
         self.currentUser = updatedUser
@@ -207,7 +220,16 @@ final class AuthManager: ObservableObject {
             throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid user ID"])
         }
         
-        let data = try Firestore.Encoder().encode(user)
+        var updatedUser = user
+        
+        // Always sync with Firebase Auth providers
+        if let currentUser = auth.currentUser {
+            let currentProviders = Set(currentUser.providerData.map { $0.providerID })
+            // Only save providers that actually exist in Firebase Auth
+            updatedUser.authProviders = Array(currentProviders)
+        }
+        
+        let data = try Firestore.Encoder().encode(updatedUser)
         try await db.collection(usersCollection).document(user.id).setData(data)
     }
     
@@ -348,13 +370,73 @@ final class AuthManager: ObservableObject {
         }
         
         let result = try await GIDSignIn.sharedInstance.signIn(withPresenting: root)
-        try await handleGoogleSignIn(user: result.user)
+        guard let idToken = result.user.idToken?.tokenString,
+              let email = result.user.profile?.email else {
+            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unable to get Google ID token or email"])
+        }
+        
+        let credential = GoogleAuthProvider.credential(
+            withIDToken: idToken,
+            accessToken: result.user.accessToken.tokenString
+        )
+        
+        // Check if email exists
+        if let existingUserId = try? await getUserIdByEmail(email) {
+            // Email exists, try to sign in
+            do {
+                try await auth.signIn(with: credential)
+                // Update Firestore user data if needed
+                if var user = try? await getUserById(existingUserId) {
+                    if !user.authProviders.contains("google.com") {
+                        user.authProviders.append("google.com")
+                        try await saveUserData(user)
+                    }
+                }
+            } catch {
+                // If sign-in fails, it might be because we need to link instead
+                if let currentUser = auth.currentUser {
+                    if currentUser.uid == existingUserId {
+                        // Same user, just link the Google provider
+                        try await currentUser.link(with: credential)
+                        // Update Firestore user data
+                        if var user = self.currentUser {
+                            if !user.authProviders.contains("google.com") {
+                                user.authProviders.append("google.com")
+                                try await saveUserData(user)
+                            }
+                        }
+                    } else {
+                        throw NSError(
+                            domain: "",
+                            code: -1,
+                            userInfo: [NSLocalizedDescriptionKey: "This Google account is linked to a different account. Please sign out first."]
+                        )
+                    }
+                } else {
+                    throw error
+                }
+            }
+        } else {
+            // New user, create account
+            let authResult = try await auth.signIn(with: credential)
+            let newUser = User(
+                id: authResult.user.uid,
+                email: email,
+                firstName: result.user.profile?.givenName ?? "",
+                lastName: result.user.profile?.familyName ?? "",
+                authProviders: ["google.com"]
+            )
+            try await saveUserData(newUser)
+        }
+        
+        try await fetchUserData(userId: auth.currentUser?.uid ?? "")
     }
     
     func handleGoogleSignIn(user: GIDGoogleUser?) async throws {
         guard let googleUser = user,
-              let idToken = googleUser.idToken?.tokenString else {
-            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unable to get ID token"])
+              let idToken = googleUser.idToken?.tokenString,
+              let email = googleUser.profile?.email else {
+            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unable to get Google sign in information"])
         }
         
         let credential = GoogleAuthProvider.credential(
@@ -362,34 +444,56 @@ final class AuthManager: ObservableObject {
             accessToken: googleUser.accessToken.tokenString
         )
         
-        do {
-            let authResult = try await auth.signIn(with: credential)
-            
-            // Check if user exists in Firestore
-            if let existingUser = try? await getUserById(authResult.user.uid) {
-                // Update providers if needed
-                var updatedUser = existingUser
-                if !existingUser.authProviders.contains("google.com") {
-                    updatedUser.authProviders.append("google.com")
-                    try await saveUserData(updatedUser)
+        // Check if email exists
+        if let existingUserId = try? await getUserIdByEmail(email) {
+            // Email exists, try to sign in
+            do {
+                try await auth.signIn(with: credential)
+                // Update Firestore user data if needed
+                if var user = try? await getUserById(existingUserId) {
+                    if !user.authProviders.contains("google.com") {
+                        user.authProviders.append("google.com")
+                        try await saveUserData(user)
+                    }
                 }
-            } else {
-                // Create new user if doesn't exist
-                let newUser = User(
-                    id: authResult.user.uid,
-                    email: authResult.user.email ?? "",
-                    firstName: googleUser.profile?.givenName ?? "",
-                    lastName: googleUser.profile?.familyName ?? "",
-                    authProviders: ["google.com"]
-                )
-                try await saveUserData(newUser)
+            } catch {
+                // If sign-in fails, it might be because we need to link instead
+                if let currentUser = auth.currentUser {
+                    if currentUser.uid == existingUserId {
+                        // Same user, just link the Google provider
+                        try await currentUser.link(with: credential)
+                        // Update Firestore user data
+                        if var user = self.currentUser {
+                            if !user.authProviders.contains("google.com") {
+                                user.authProviders.append("google.com")
+                                try await saveUserData(user)
+                            }
+                        }
+                    } else {
+                        throw NSError(
+                            domain: "",
+                            code: -1,
+                            userInfo: [NSLocalizedDescriptionKey: "This Google account is linked to a different account. Please sign out first."]
+                        )
+                    }
+                } else {
+                    throw error
+                }
             }
-            
-            try await fetchUserData(userId: authResult.user.uid)
-        } catch {
-            print("Error signing in with Google:", error.localizedDescription)
-            throw error
+        } else {
+            // New user, create account
+            let authResult = try await auth.signIn(with: credential)
+            let newUser = User(
+                id: authResult.user.uid,
+                email: email,
+                firstName: googleUser.profile?.givenName ?? "",
+                lastName: googleUser.profile?.familyName ?? "",
+                authProviders: ["google.com"]
+            )
+            try await saveUserData(newUser)
         }
+        
+        try await fetchUserData(userId: auth.currentUser?.uid ?? "")
     }
     
     func updateUserProfile(firstName: String, lastName: String) async throws {
@@ -424,7 +528,25 @@ final class AuthManager: ObservableObject {
             throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Email/password authentication is not enabled for this account"])
         }
         
+        // Send reset email
         try await auth.sendPasswordReset(withEmail: user.email)
+        
+        // Remove all other auth providers except password
+        var updatedUser = user
+        updatedUser.authProviders = ["password"]
+        
+        // Remove providers from Firebase Auth
+        if let currentUser = auth.currentUser {
+            for provider in currentUser.providerData {
+                if provider.providerID != "password" {
+                    try await currentUser.unlink(fromProvider: provider.providerID)
+                }
+            }
+        }
+        
+        // Update Firestore with only password provider
+        try await saveUserData(updatedUser)
+        self.currentUser = updatedUser
     }
     
     func linkEmailPassword(email: String, password: String) async throws {
@@ -463,8 +585,9 @@ final class AuthManager: ObservableObject {
         // Sign in with Google
         let result = try await GIDSignIn.sharedInstance.signIn(withPresenting: root)
         
-        guard let idToken = result.user.idToken?.tokenString else {
-            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unable to get ID token"])
+        guard let idToken = result.user.idToken?.tokenString,
+              let email = result.user.profile?.email else {
+            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unable to get Google sign in information"])
         }
         
         // Create Google credential
@@ -473,33 +596,54 @@ final class AuthManager: ObservableObject {
             accessToken: result.user.accessToken.tokenString
         )
         
-        // Link the credential to the current user
+        // Get current user
         guard let currentUser = auth.currentUser else {
             throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "No user is currently signed in"])
+        }
+        
+        // Verify the email matches
+        if currentUser.email != email {
+            throw NSError(
+                domain: "",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "The Google account email does not match your current account email"]
+            )
         }
         
         do {
             // Check if the provider is already linked
             if currentUser.providerData.contains(where: { $0.providerID == "google.com" }) {
-                throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Google account is already linked to this account"])
+                throw NSError(
+                    domain: "",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "Google account is already linked to this account"]
+                )
             }
             
+            // Link the credential
             try await currentUser.link(with: credential)
             
-            // Only update Firestore after successful linking
+            // Update Firestore after successful linking
             if var user = self.currentUser, !user.authProviders.contains("google.com") {
                 user.authProviders.append("google.com")
                 try await saveUserData(user)
                 self.currentUser = user
             }
         } catch let error as NSError {
-            // Handle specific Firebase errors
             if error.domain == AuthErrorDomain {
                 switch error.code {
                 case AuthErrorCode.providerAlreadyLinked.rawValue:
-                    throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "This Google account is already linked to this account"])
+                    throw NSError(
+                        domain: "",
+                        code: -1,
+                        userInfo: [NSLocalizedDescriptionKey: "This Google account is already linked to this account"]
+                    )
                 case AuthErrorCode.credentialAlreadyInUse.rawValue:
-                    throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "This Google account is already linked to another account"])
+                    throw NSError(
+                        domain: "",
+                        code: -1,
+                        userInfo: [NSLocalizedDescriptionKey: "This Google account is already linked to another account"]
+                    )
                 default:
                     throw error
                 }
@@ -555,5 +699,184 @@ final class AuthManager: ObservableObject {
         default:
             throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unsupported authentication provider"])
         }
+    }
+    
+    func signInWithApple() async throws {
+        let nonce = randomNonceString()
+        
+        return try await withCheckedThrowingContinuation { continuation in
+            // Create a new delegate for this sign-in attempt
+            let signInDelegate = SignInWithAppleDelegate { [weak self] result in
+                Task { @MainActor [weak self] in
+                    do {
+                        guard let self = self else {
+                            continuation.resume(throwing: NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Auth manager was deallocated"]))
+                            return
+                        }
+                        
+                        switch result {
+                        case .success(let authorization):
+                            guard let appleIDCredential = authorization.credential as? ASAuthorizationAppleIDCredential,
+                                  let appleIDToken = appleIDCredential.identityToken,
+                                  let idTokenString = String(data: appleIDToken, encoding: .utf8) else {
+                                throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unable to get Apple ID token"])
+                            }
+                            
+                            let credential = OAuthProvider.appleCredential(
+                                withIDToken: idTokenString,
+                                rawNonce: nonce,
+                                fullName: appleIDCredential.fullName
+                            )
+                            
+                            let email = appleIDCredential.email ?? self.auth.currentUser?.email
+                            
+                            if let email = email,
+                               let existingUserId = try? await self.getUserIdByEmail(email) {
+                                // Email exists, handle existing user
+                                if let currentUser = self.auth.currentUser,
+                                   currentUser.uid == existingUserId {
+                                    try await currentUser.link(with: credential)
+                                } else {
+                                    try await self.auth.signIn(with: credential)
+                                }
+                            } else {
+                                // New user or no email
+                                let authResult = try await self.auth.signIn(with: credential)
+                                if let email = email {
+                                    let newUser = User(
+                                        id: authResult.user.uid,
+                                        email: email,
+                                        firstName: appleIDCredential.fullName?.givenName ?? "",
+                                        lastName: appleIDCredential.fullName?.familyName ?? "",
+                                        authProviders: ["apple.com"]
+                                    )
+                                    try await self.saveUserData(newUser)
+                                }
+                            }
+                            
+                            try await self.fetchUserData(userId: self.auth.currentUser?.uid ?? "")
+                            continuation.resume()
+                            
+                        case .failure(let error):
+                            throw error
+                        }
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+            
+            // Store delegate as a property to prevent deallocation
+            self.appleSignInDelegate = signInDelegate
+            
+            let appleIDProvider = ASAuthorizationAppleIDProvider()
+            let request = appleIDProvider.createRequest()
+            request.requestedScopes = [.fullName, .email]
+            request.nonce = sha256(nonce)
+            
+            let controller = ASAuthorizationController(authorizationRequests: [request])
+            controller.delegate = signInDelegate
+            controller.presentationContextProvider = signInDelegate
+            
+            // Start the sign-in flow
+            controller.performRequests()
+        }
+    }
+    
+    private func randomNonceString(length: Int = 32) -> String {
+        precondition(length > 0)
+        var randomBytes = [UInt8](repeating: 0, count: length)
+        let errorCode = SecRandomCopyBytes(kSecRandomDefault, randomBytes.count, &randomBytes)
+        if errorCode != errSecSuccess {
+            fatalError("Unable to generate nonce. SecRandomCopyBytes failed with OSStatus \(errorCode)")
+        }
+        
+        let charset: [Character] =
+        Array("0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._")
+        
+        let nonce = randomBytes.map { byte in
+            charset[Int(byte) % charset.count]
+        }
+        
+        return String(nonce)
+    }
+    
+    private func sha256(_ input: String) -> String {
+        let inputData = Data(input.utf8)
+        let hashedData = SHA256.hash(data: inputData)
+        let hashString = hashedData.compactMap {
+            String(format: "%02x", $0)
+        }.joined()
+        
+        return hashString
+    }
+    
+    func deleteAccount() async throws {
+        guard let currentUser = auth.currentUser else {
+            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "No user is currently signed in"])
+        }
+        
+        guard let user = self.currentUser else {
+            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "User data not found"])
+        }
+        
+        // Clean up user data
+        // 1. Remove user from all party editor lists
+        let partiesSnapshot = try await db.collection(partiesCollection).whereField("editors", arrayContains: user.id).getDocuments()
+        for document in partiesSnapshot.documents {
+            // Update the editors array directly in Firestore
+            try await db.collection(partiesCollection).document(document.documentID).updateData([
+                "editors": FieldValue.arrayRemove([user.id])
+            ])
+        }
+        
+        // 2. Delete user document from Firestore
+        try await db.collection(usersCollection).document(user.id).delete()
+        
+        // 3. Delete Firebase Auth account
+        try await currentUser.delete()
+        
+        // 4. Reset local state
+        resetState()
+    }
+}
+
+// Helper class to handle Apple Sign In delegate methods
+private class SignInWithAppleDelegate: NSObject, ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
+    var handler: (Result<ASAuthorization, Error>) -> Void
+    private weak var window: UIWindow?
+    
+    init(handler: @escaping (Result<ASAuthorization, Error>) -> Void) {
+        self.handler = handler
+        super.init()
+        
+        // Store window reference
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let window = windowScene.windows.first {
+            self.window = window
+        }
+    }
+    
+    func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
+        if let window = self.window {
+            return window
+        }
+        
+        // Fallback to getting a new window reference if the stored one is nil
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let window = windowScene.windows.first {
+            self.window = window
+            return window
+        }
+        
+        fatalError("No window found for Apple Sign In presentation")
+    }
+    
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
+        handler(.success(authorization))
+    }
+    
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
+        handler(.failure(error))
     }
 }

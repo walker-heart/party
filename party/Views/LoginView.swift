@@ -1,6 +1,7 @@
 import SwiftUI
 import FirebaseAuth
 import GoogleSignInSwift
+import AuthenticationServices
 
 struct LoginView: View {
     @Environment(\.dismiss) private var dismiss
@@ -86,10 +87,35 @@ struct LoginView: View {
                     CustomGoogleSignInButton(action: signInWithGoogle)
                         .padding(.horizontal, Theme.Spacing.small)
                     
+                    SignInWithAppleButton(
+                        onRequest: { request in
+                            request.requestedScopes = [.fullName, .email]
+                        },
+                        onCompletion: { _ in }
+                    )
+                    .frame(height: 44)
+                    .cornerRadius(8)
+                    .padding(.horizontal, Theme.Spacing.small)
+                    .onTapGesture {
+                        Task {
+                            do {
+                                isLoading = true
+                                showError = false
+                                try await authManager.signInWithApple()
+                                dismiss()
+                            } catch {
+                                showError = true
+                                errorMessage = error.localizedDescription
+                            }
+                            isLoading = false
+                        }
+                    }
+                    
                     Button(action: { showingCreateAccount = true }) {
                         Text("Create Account")
                             .foregroundColor(Theme.Colors.primary)
                     }
+                    .padding(.top, Theme.Spacing.small)
                 }
                 .padding()
             }
@@ -163,6 +189,7 @@ struct LoginView: View {
         
         Task {
             do {
+                // Just send the reset email without modifying providers
                 try await Auth.auth().sendPasswordReset(withEmail: email)
                 showingPasswordResetSuccess = true
                 showError = false

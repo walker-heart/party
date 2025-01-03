@@ -66,6 +66,22 @@ struct AttendeeListView: View {
                     HStack(spacing: Theme.Spacing.medium) {
                         if let party = partyManager.currentParty,
                            let userId = authManager.currentUser?.id {
+                            // URL Button - only for creators and admins
+                            if party.creatorId == userId || authManager.currentUser?.isAdmin == true {
+                                Button(action: {
+                                    let shortId = String(party.creatorId.prefix(6))
+                                    let formattedName = party.name.lowercased().replacingOccurrences(of: " ", with: "-")
+                                    let urlString = "https://wplister.replit.app/\(shortId)/\(formattedName)"
+                                    if let url = URL(string: urlString) {
+                                        UIApplication.shared.open(url)
+                                    }
+                                }) {
+                                    Image(systemName: "tray.and.arrow.down")
+                                        .foregroundColor(Theme.Colors.primary)
+                                }
+                            }
+                            
+                            // Settings and Add buttons - for creators, admins, and editors
                             if party.creatorId == userId || authManager.currentUser?.isAdmin == true || party.editors.contains(userId) {
                                 Button(action: { showingSettings = true }) {
                                     Image(systemName: "gear")

@@ -135,11 +135,13 @@ struct PartyCard: View {
     let creatorId: String
     let currentUserId: String?
     let action: () -> Void
-    let onDelete: () -> Void
-    let onRemove: () -> Void
+    let onDelete: () async throws -> Void
+    let onRemove: () async throws -> Void
     @EnvironmentObject private var authManager: AuthManager
     @Environment(\.colorScheme) private var colorScheme
     @State private var showingLeaveConfirmation = false
+    @State private var showingDeleteConfirmation = false
+    @State private var isDeleting = false
     
     var body: some View {
         Button(action: action) {
@@ -159,20 +161,40 @@ struct PartyCard: View {
                                        party.editors.contains(userId) {
                                         showingLeaveConfirmation = true
                                     } else {
-                                        onRemove()
+                                        Task {
+                                            isDeleting = true
+                                            do {
+                                                try await onRemove()
+                                            } catch {
+                                                // Error is handled by MainView
+                                            }
+                                            isDeleting = false
+                                        }
                                     }
                                 }) {
-                                    Image(systemName: "rectangle.portrait.and.arrow.right")
-                                        .foregroundColor(Theme.Colors.error)
+                                    if isDeleting {
+                                        ProgressView()
+                                            .tint(Theme.Colors.error)
+                                    } else {
+                                        Image(systemName: "rectangle.portrait.and.arrow.right")
+                                            .foregroundColor(Theme.Colors.error)
+                                    }
                                 }
+                                .disabled(isDeleting)
                             }
                         }
                         
                         if currentUserId == creatorId || authManager.currentUser?.isAdmin == true {
-                            Button(action: onDelete) {
-                                Image(systemName: "trash")
-                                    .foregroundColor(Theme.Colors.error)
+                            Button(action: { showingDeleteConfirmation = true }) {
+                                if isDeleting {
+                                    ProgressView()
+                                        .tint(Theme.Colors.error)
+                                } else {
+                                    Image(systemName: "trash")
+                                        .foregroundColor(Theme.Colors.error)
+                                }
                             }
+                            .disabled(isDeleting)
                         }
                     }
                 }
@@ -186,13 +208,38 @@ struct PartyCard: View {
             .background(Theme.Colors.surfaceLight(colorScheme))
             .cornerRadius(Theme.CornerRadius.medium)
         }
+        .disabled(isDeleting)
         .alert("Leave Party", isPresented: $showingLeaveConfirmation) {
             Button("Leave", role: .destructive) {
-                onRemove()
+                Task {
+                    isDeleting = true
+                    do {
+                        try await onRemove()
+                    } catch {
+                        // Error is handled by MainView
+                    }
+                    isDeleting = false
+                }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Are you sure you want to leave this party? You will be removed as an editor.")
+        }
+        .alert("Delete Party", isPresented: $showingDeleteConfirmation) {
+            Button("Delete", role: .destructive) {
+                Task {
+                    isDeleting = true
+                    do {
+                        try await onDelete()
+                    } catch {
+                        // Error is handled by MainView
+                    }
+                    isDeleting = false
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Are you sure you want to delete this party? This action cannot be undone.")
         }
     }
 }
