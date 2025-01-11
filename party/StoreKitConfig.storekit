@@ -1,0 +1,23 @@
+{
+  "identifier" : "party_storekit_config",
+  "displayName" : "Party Premium Configuration",
+  "description" : "StoreKit configuration for testing Party Premium features",
+  "subscriptionGroups" : [
+    {
+      "id" : "premium_group",
+      "displayName" : "Premium",
+      "subscriptions" : [
+        {
+          "id" : "premium_monthly",
+          "type" : "autoRenewable",
+          "displayName" : "Premium Monthly",
+          "description" : "Access to all premium features",
+          "productID" : "premium_monthly",
+          "price" : "4.99",
+          "currency" : "USD",
+          "subscriptionPeriod" : "P1M"
+        }
+      ]
+    }
+  ]
+} 

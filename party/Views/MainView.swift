@@ -9,6 +9,7 @@ struct MainView: View {
     @State private var showingAttendeeList = false
     @State private var showingLoginSheet = false
     @State private var showingAccount = false
+    @State private var showingPremium = false
     @State private var partyName = ""
     @State private var passcode = ""
     @State private var showError = false
@@ -84,6 +85,9 @@ struct MainView: View {
             .sheet(isPresented: $showingAccount) {
                 AccountView()
             }
+            .sheet(isPresented: $showingPremium) {
+                PremiumView()
+            }
         }
         .environmentObject(authManager)
         .environmentObject(partyManager)
@@ -111,12 +115,21 @@ struct MainView: View {
         }
         
         ToolbarItem(placement: .navigationBarTrailing) {
-            Button("Help") {
-                if let url = URL(string: "https://wplister.replit.app/") {
-                    UIApplication.shared.open(url)
+            HStack(spacing: 16) {
+                if authManager.isAuthenticated {
+                    Button(action: { showingPremium = true }) {
+                        Image(systemName: "crown.fill")
+                            .foregroundColor(.purple)
+                    }
                 }
+                
+                Button("Help") {
+                    if let url = URL(string: "https://wplister.replit.app/") {
+                        UIApplication.shared.open(url)
+                    }
+                }
+                .foregroundColor(Theme.Colors.textPrimary(colorScheme))
             }
-            .foregroundColor(Theme.Colors.textPrimary(colorScheme))
         }
     }
 }

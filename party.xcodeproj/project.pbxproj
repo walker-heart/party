@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		021988CF2D307E0300716D50 /* StoreKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 021988CE2D307E0300716D50 /* StoreKit.framework */; };
 		023549142D15D7D60045AA8B /* FirebaseFirestoreCombine-Community in Frameworks */ = {isa = PBXBuildFile; productRef = 023549132D15D7D60045AA8B /* FirebaseFirestoreCombine-Community */; };
 		027039422D15D630009123CC /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 027039412D15D630009123CC /* FirebaseAuth */; };
 		027039442D15D630009123CC /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = 027039432D15D630009123CC /* FirebaseCore */; };
@@ -14,6 +15,7 @@
 		028651A22D1B53040031F0A7 /* FirebaseAuthCombine-Community in Frameworks */ = {isa = PBXBuildFile; productRef = 028651A12D1B53040031F0A7 /* FirebaseAuthCombine-Community */; };
 		02D0CCB62D1B3FD400547466 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 02D0CCB52D1B3FD400547466 /* GoogleSignIn */; };
 		02D0CCB82D1B3FD400547466 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 02D0CCB72D1B3FD400547466 /* GoogleSignInSwift */; };
+		02EAB52B2D3098B100C81127 /* Configuration.storekit in Resources */ = {isa = PBXBuildFile; fileRef = 021988D02D308F8500716D50 /* Configuration.storekit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -34,6 +36,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		021988CE2D307E0300716D50 /* StoreKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = StoreKit.framework; path = System/Library/Frameworks/StoreKit.framework; sourceTree = SDKROOT; };
+		021988D02D308F8500716D50 /* Configuration.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = Configuration.storekit; sourceTree = "<group>"; };
 		02D9C14A2D15B70B00D7D33C /* party.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = party.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		02D9C15A2D15B70C00D7D33C /* partyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = partyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		02D9C1642D15B70C00D7D33C /* partyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = partyUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -78,6 +82,7 @@
 				02D0CCB62D1B3FD400547466 /* GoogleSignIn in Frameworks */,
 				027039442D15D630009123CC /* FirebaseCore in Frameworks */,
 				023549142D15D7D60045AA8B /* FirebaseFirestoreCombine-Community in Frameworks */,
+				021988CF2D307E0300716D50 /* StoreKit.framework in Frameworks */,
 				02D0CCB82D1B3FD400547466 /* GoogleSignInSwift in Frameworks */,
 				027039422D15D630009123CC /* FirebaseAuth in Frameworks */,
 				028651A22D1B53040031F0A7 /* FirebaseAuthCombine-Community in Frameworks */,
@@ -102,12 +107,22 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		021988CD2D307E0300716D50 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				021988CE2D307E0300716D50 /* StoreKit.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		02D9C1412D15B70B00D7D33C = {
 			isa = PBXGroup;
 			children = (
+				021988D02D308F8500716D50 /* Configuration.storekit */,
 				02D9C14C2D15B70B00D7D33C /* party */,
 				02D9C15D2D15B70C00D7D33C /* partyTests */,
 				02D9C1672D15B70C00D7D33C /* partyUITests */,
+				021988CD2D307E0300716D50 /* Frameworks */,
 				02D9C14B2D15B70B00D7D33C /* Products */,
 			);
 			sourceTree = "<group>";
@@ -253,6 +268,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				02EAB52B2D3098B100C81127 /* Configuration.storekit in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -375,7 +391,7 @@
 				"INFOPLIST_KEY_UISupportedInterfaceOrientations[sdk=*]" = UIInterfaceOrientationPortrait;
 				"INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad[sdk=*]" = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight\n";
 				"INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone[sdk=*]" = UIInterfaceOrientationPortrait;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
@@ -446,7 +462,7 @@
 				"INFOPLIST_KEY_UISupportedInterfaceOrientations[sdk=*]" = UIInterfaceOrientationPortrait;
 				"INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad[sdk=*]" = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight\n";
 				"INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone[sdk=*]" = UIInterfaceOrientationPortrait;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
@@ -477,7 +493,7 @@
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -511,7 +527,7 @@
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -533,7 +549,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = R47MUY33H7;
 				INFOPLIST_FILE = party/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = walker.partyTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -552,7 +568,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = R47MUY33H7;
 				INFOPLIST_FILE = party/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = walker.partyTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
